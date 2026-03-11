@@ -19,7 +19,7 @@ Console.WriteLine("=== PCAmerica DB Test Driver ===\n");
 
 // --- Configuration ---
 var config = new ConfigurationBuilder()
-    .SetBasePath(Directory.GetCurrentDirectory())
+    .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: true)
     .AddJsonFile("appsettings.local.json", optional: true)
     .AddCommandLine(args, new Dictionary<string, string>
