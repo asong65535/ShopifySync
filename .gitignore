@@ -31,13 +31,14 @@ appsettings.local.json
 
 ## Project docs (managed locally, not versioned)
 /CLAUDE.md
-/ARCHITECTURE.md
-/checklist.md
-/debt.md
-/testing-automation.md
+/architecture.html
+docs/
 
 ## Test output
 testout.txt
+
+## Git worktrees
+.worktrees/
 
 ## OS
 .DS_Store
