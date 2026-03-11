@@ -42,3 +42,6 @@ testout.txt
 ## OS
 .DS_Store
 Thumbs.db
+
+## VM Transfer Script
+test.sh
