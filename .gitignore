@@ -1,0 +1,44 @@
+## .NET build artifacts
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.ncrunch*
+.idea/
+.vscode/
+*.DotSettings.user
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+## NuGet
+*.nupkg
+*.snupkg
+packages/
+!**/packages/repositories.config
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## Secret / local config overrides — never commit these
+appsettings.local.json
+**/appsettings.local.json
+
+## Claude Code memory and session files
+.claude/
+
+## Project docs (managed locally, not versioned)
+/CLAUDE.md
+/ARCHITECTURE.md
+/checklist.md
+/debt.md
+/testing-automation.md
+
+## Test output
+testout.txt
+
+## OS
+.DS_Store
+Thumbs.db
