@@ -1,0 +1,45 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ShopifySyncApp.Views.SettingsWindow"
+        Title="Settings"
+        Width="480" Height="420"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+  <StackPanel Margin="16" Spacing="12">
+
+    <TextBlock Text="Shopify Store URL" />
+    <TextBox Text="{Binding StoreUrl}" />
+    <TextBlock Text="{Binding StoreUrlError}" Foreground="Red"
+               IsVisible="{Binding StoreUrlError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+    <TextBlock Text="Shopify Access Token" />
+    <TextBox Text="{Binding AccessToken}" PasswordChar="*" />
+    <TextBlock Text="{Binding AccessTokenError}" Foreground="Red"
+               IsVisible="{Binding AccessTokenError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+    <TextBlock Text="PCA Connection String" />
+    <TextBox Text="{Binding PcaConnectionString}" />
+
+    <TextBlock Text="ShopifySync Connection String" />
+    <TextBox Text="{Binding ShopifySyncConnectionString}" />
+
+    <TextBlock Text="Poll Interval (minutes)" />
+    <NumericUpDown Value="{Binding PollIntervalMinutes}" Minimum="1" Increment="1" FormatString="0" />
+    <TextBlock Text="{Binding PollIntervalError}" Foreground="Red"
+               IsVisible="{Binding PollIntervalError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+    <CheckBox IsChecked="{Binding AutoStartOnLaunch}">Auto-start sync on launch</CheckBox>
+
+    <Button Command="{Binding SaveCommand}"
+            IsEnabled="{Binding !IsSaving}"
+            HorizontalAlignment="Left">
+      Save
+    </Button>
+
+    <TextBlock Text="{Binding RestartNotice}" Foreground="DarkOrange"
+               IsVisible="{Binding RestartNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+               TextWrapping="Wrap" />
+
+  </StackPanel>
+</Window>

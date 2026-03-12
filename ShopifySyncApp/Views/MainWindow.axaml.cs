@@ -1,6 +1,6 @@
 using Avalonia.Controls;
 
-namespace ShopifySyncApp;
+namespace ShopifySyncApp.Views;
 
 public partial class MainWindow : Window
 {

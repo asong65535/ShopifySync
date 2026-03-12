@@ -1,0 +1,62 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ShopifySyncApp.Views.HistoryView">
+
+  <StackPanel Margin="16" Spacing="12">
+
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <TextBlock VerticalAlignment="Center">Run:</TextBlock>
+      <ComboBox ItemsSource="{Binding RunFileNames}"
+                SelectedItem="{Binding SelectedFileName}"
+                MinWidth="260" />
+    </StackPanel>
+
+    <StackPanel IsVisible="{Binding SelectedRecord, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <TextBlock>
+        <Run Text="Completed: " />
+        <Run Text="{Binding SelectedRecord.CompletedAt, StringFormat='{}{0:yyyy-MM-dd HH:mm:ss} UTC'}" />
+      </TextBlock>
+      <TextBlock>
+        <Run Text="Total: " /><Run Text="{Binding SelectedRecord.TotalPcaItems}" />
+        <Run Text="  Changed: " /><Run Text="{Binding SelectedRecord.ChangedItems}" />
+      </TextBlock>
+      <TextBlock>
+        <Run Text="Pushed: " /><Run Text="{Binding SelectedRecord.PushedToShopify}" />
+        <Run Text="  Not in map: " /><Run Text="{Binding SelectedRecord.NotInSyncMapCount}" />
+      </TextBlock>
+      <TextBlock>
+        <Run Text="Errors: " /><Run Text="{Binding SelectedRecord.Errors.Count}" />
+        <Run Text="  Fatal: " />
+        <Run Text="{Binding SelectedRecord.FatalError}" />
+      </TextBlock>
+
+      <Border Background="Red" Padding="8" CornerRadius="4" Margin="0,4,0,0"
+              IsVisible="{Binding SelectedRecord.FatalError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+        <TextBlock Foreground="White" Text="{Binding SelectedRecord.FatalError}" TextWrapping="Wrap" />
+      </Border>
+
+      <ItemsControl ItemsSource="{Binding SelectedRecordErrors}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <StackPanel Margin="0,4,0,0">
+              <TextBlock FontWeight="Bold" Text="{Binding CategoryName}" />
+              <ItemsControl ItemsSource="{Binding Items}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <TextBlock Text="{Binding}" Margin="16,0,0,0" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+
+    <TextBlock IsVisible="{Binding SelectedRecord, Converter={x:Static ObjectConverters.IsNull}}"
+               Foreground="Gray">
+      Select a run from the dropdown to view its details.
+    </TextBlock>
+
+  </StackPanel>
+</UserControl>

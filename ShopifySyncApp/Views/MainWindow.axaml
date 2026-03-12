@@ -1,0 +1,26 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ShopifySyncApp.ViewModels"
+        xmlns:views="using:ShopifySyncApp.Views"
+        x:Class="ShopifySyncApp.Views.MainWindow"
+        Title="ShopifySync"
+        Width="600" Height="500"
+        WindowStartupLocation="CenterScreen">
+
+  <DockPanel>
+    <Button Name="SettingsButton" DockPanel.Dock="Top"
+            HorizontalAlignment="Right"
+            Margin="8">
+      Settings
+    </Button>
+
+    <TabControl Name="MainTabs">
+      <TabItem Header="Sync Status">
+        <views:SyncStatusView DataContext="{Binding SyncStatus}" />
+      </TabItem>
+      <TabItem Header="History">
+        <views:HistoryView DataContext="{Binding History}" />
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</Window>

@@ -1,15 +1,13 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using ShopifySyncApp.Views;
 
 namespace ShopifySyncApp;
 
 public partial class App : Application
 {
-    public override void Initialize()
-    {
-        AvaloniaXamlLoader.Load(this);
-    }
+    public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
     public override void OnFrameworkInitializationCompleted()
     {
@@ -17,7 +15,6 @@ public partial class App : Application
         {
             desktop.MainWindow = new MainWindow();
         }
-
         base.OnFrameworkInitializationCompleted();
     }
 }

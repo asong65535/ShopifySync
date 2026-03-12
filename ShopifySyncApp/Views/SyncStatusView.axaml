@@ -1,0 +1,62 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ShopifySyncApp.ViewModels"
+             x:Class="ShopifySyncApp.Views.SyncStatusView">
+
+  <StackPanel Name="RootPanel" Margin="16" Spacing="12">
+
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <ProgressBar IsIndeterminate="{Binding IsRunning}"
+                   IsVisible="{Binding IsRunning}"
+                   Width="120" Height="6" />
+      <TextBlock Text="Running..." IsVisible="{Binding IsRunning}" />
+      <TextBlock Text="Idle" IsVisible="{Binding !IsRunning}" />
+    </StackPanel>
+
+    <Button Command="{Binding SyncNowCommand}"
+            IsEnabled="{Binding !IsRunning}">
+      Sync Now
+    </Button>
+
+    <StackPanel IsVisible="{Binding LastCompletedAt, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <TextBlock>
+        <Run Text="Last run: " />
+        <Run Text="{Binding LastCompletedAt, StringFormat='{}{0:yyyy-MM-dd HH:mm:ss} UTC'}" />
+      </TextBlock>
+      <TextBlock>
+        <Run Text="Total: " /><Run Text="{Binding TotalPcaItems}" />
+        <Run Text="  Changed: " /><Run Text="{Binding ChangedItems}" />
+      </TextBlock>
+      <TextBlock>
+        <Run Text="Pushed: " /><Run Text="{Binding PushedToShopify}" />
+        <Run Text="  Not in map: " /><Run Text="{Binding NotInSyncMapCount}" />
+      </TextBlock>
+      <TextBlock>
+        <Run Text="Errors: " /><Run Text="{Binding ErrorCount}" />
+      </TextBlock>
+    </StackPanel>
+
+    <Border Background="Red" Padding="8" CornerRadius="4"
+            IsVisible="{Binding FatalError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <TextBlock Foreground="White" Text="{Binding FatalError}" TextWrapping="Wrap" />
+    </Border>
+
+    <ItemsControl ItemsSource="{Binding ErrorGroups}">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate>
+          <StackPanel Margin="0,4,0,0">
+            <TextBlock FontWeight="Bold" Text="{Binding CategoryName}" />
+            <ItemsControl ItemsSource="{Binding Items}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding}" Margin="16,0,0,0" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+
+  </StackPanel>
+</UserControl>
