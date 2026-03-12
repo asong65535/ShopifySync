@@ -67,9 +67,14 @@ public partial class SettingsViewModel : ViewModelBase
             var prevPcaConn = root?["ConnectionStrings"]?["PcAmerica"]?.GetValue<string>() ?? "";
             var prevSyncConn = root?["ConnectionStrings"]?["ShopifySync"]?.GetValue<string>() ?? "";
             var prevToken = root?["Shopify"]?["AccessToken"]?.GetValue<string>() ?? "";
+            var prevInterval = root?["App"]?["PollIntervalMinutes"]?.GetValue<int>() ?? 5;
+            var prevAutoStart = root?["App"]?["AutoStartOnLaunch"]?.GetValue<bool>() ?? false;
+
             bool connectionChanged = PcaConnectionString != prevPcaConn
                 || ShopifySyncConnectionString != prevSyncConn
                 || AccessToken != prevToken;
+            bool schedulerChanged = PollIntervalInt != prevInterval
+                || AutoStartOnLaunch != prevAutoStart;
 
             _settings.SetAll(new Dictionary<string, JsonNode?>
             {
@@ -81,12 +86,15 @@ public partial class SettingsViewModel : ViewModelBase
                 ["App:AutoStartOnLaunch"] = JsonValue.Create(AutoStartOnLaunch),
             });
 
-            await Task.Run(() =>
+            if (schedulerChanged)
             {
-                _syncService.StopScheduler();
-                if (AutoStartOnLaunch)
-                    _syncService.StartScheduler(TimeSpan.FromMinutes(PollIntervalInt));
-            });
+                await Task.Run(() =>
+                {
+                    _syncService.StopScheduler();
+                    if (AutoStartOnLaunch)
+                        _syncService.StartScheduler(TimeSpan.FromMinutes(PollIntervalInt));
+                });
+            }
 
             if (connectionChanged)
                 RestartNotice = "Restart required for connection changes to take effect.";

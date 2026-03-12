@@ -41,14 +41,22 @@ public partial class HistoryViewModel : ViewModelBase
 
     private async Task LoadSelectedAsync(string fileName)
     {
-        SelectedRecord = await _reader.LoadRunAsync(fileName);
-        SelectedRecordErrors = SelectedRecord is null ? [] :
-            SelectedRecord.Errors
-                .GroupBy(e => e.Category)
-                .Select(g => new ErrorGroupViewModel(
-                    FriendlyCategory(g.Key),
-                    g.Select(e => $"{e.PcaItemNum}: {e.Detail}").ToList()))
-                .ToList();
+        try
+        {
+            SelectedRecord = await _reader.LoadRunAsync(fileName);
+            SelectedRecordErrors = SelectedRecord is null ? [] :
+                SelectedRecord.Errors
+                    .GroupBy(e => e.Category)
+                    .Select(g => new ErrorGroupViewModel(
+                        FriendlyCategory(g.Key),
+                        g.Select(e => $"{e.PcaItemNum}: {e.Detail}").ToList()))
+                    .ToList();
+        }
+        catch (Exception)
+        {
+            SelectedRecord = null;
+            SelectedRecordErrors = [];
+        }
     }
 
     private static string FriendlyCategory(string category) => category switch
