@@ -27,6 +27,7 @@ public partial class SyncStatusViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<ErrorGroupViewModel> _errorGroups = [];
 
     public bool HasErrors => ErrorCount > 0 || !string.IsNullOrEmpty(FatalError);
+    public bool HasSynced => LastCompletedAt is not null;
 
     public SyncStatusViewModel(SyncService syncService, HistoryWriter historyWriter)
     {
@@ -100,6 +101,7 @@ public partial class SyncStatusViewModel : ViewModelBase
                 g.Select(e => $"{e.PcaItemNum}: {e.Detail}").ToList()))
             .ToList();
         OnPropertyChanged(nameof(HasErrors));
+        OnPropertyChanged(nameof(HasSynced));
     }
 
     private static string FriendlyCategory(SyncErrorCategory cat) => cat switch

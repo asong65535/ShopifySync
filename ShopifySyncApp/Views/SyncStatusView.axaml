@@ -25,28 +25,40 @@
 
       <!-- Status row: dot + text -->
       <StackPanel Orientation="Horizontal" Spacing="10">
-        <!-- Green dot when idle + no errors -->
+        <!-- Grey dot: never synced + idle -->
+        <Ellipse Width="10" Height="10" Fill="#999999"
+                 VerticalAlignment="Center">
+          <Ellipse.IsVisible>
+            <MultiBinding Converter="{x:Static BoolConverters.And}">
+              <Binding Path="!IsRunning" />
+              <Binding Path="!HasSynced" />
+            </MultiBinding>
+          </Ellipse.IsVisible>
+        </Ellipse>
+        <!-- Green dot: idle + synced + no errors -->
         <Ellipse Width="10" Height="10" Fill="#4caf50"
                  VerticalAlignment="Center">
           <Ellipse.IsVisible>
             <MultiBinding Converter="{x:Static BoolConverters.And}">
               <Binding Path="!IsRunning" />
+              <Binding Path="HasSynced" />
               <Binding Path="!HasErrors" />
             </MultiBinding>
           </Ellipse.IsVisible>
         </Ellipse>
-        <!-- Red dot when idle + errors -->
+        <!-- Red dot: idle + synced + errors -->
         <Ellipse Width="10" Height="10" Fill="#c42b1c"
                  VerticalAlignment="Center">
           <Ellipse.IsVisible>
             <MultiBinding Converter="{x:Static BoolConverters.And}">
               <Binding Path="!IsRunning" />
+              <Binding Path="HasSynced" />
               <Binding Path="HasErrors" />
             </MultiBinding>
           </Ellipse.IsVisible>
         </Ellipse>
-        <!-- Blue dot when running -->
-        <Ellipse Width="10" Height="10" Fill="#0078d4"
+        <!-- Yellow dot: running -->
+        <Ellipse Width="10" Height="10" Fill="#e5a000"
                  VerticalAlignment="Center"
                  IsVisible="{Binding IsRunning}" />
 
@@ -54,11 +66,25 @@
                    FontSize="14" VerticalAlignment="Center" />
         <StackPanel Orientation="Horizontal" Spacing="6"
                     IsVisible="{Binding !IsRunning}">
-          <TextBlock Text="Idle" FontSize="14" VerticalAlignment="Center"
-                     IsVisible="{Binding !HasErrors}" />
+          <TextBlock Text="Unsynced" FontSize="14" VerticalAlignment="Center"
+                     IsVisible="{Binding !HasSynced}" />
+          <TextBlock Text="Idle" FontSize="14" VerticalAlignment="Center">
+            <TextBlock.IsVisible>
+              <MultiBinding Converter="{x:Static BoolConverters.And}">
+                <Binding Path="HasSynced" />
+                <Binding Path="!HasErrors" />
+              </MultiBinding>
+            </TextBlock.IsVisible>
+          </TextBlock>
           <TextBlock Text="Completed with errors" FontSize="14" VerticalAlignment="Center"
-                     Foreground="#c42b1c"
-                     IsVisible="{Binding HasErrors}" />
+                     Foreground="#c42b1c">
+            <TextBlock.IsVisible>
+              <MultiBinding Converter="{x:Static BoolConverters.And}">
+                <Binding Path="HasSynced" />
+                <Binding Path="HasErrors" />
+              </MultiBinding>
+            </TextBlock.IsVisible>
+          </TextBlock>
           <TextBlock FontSize="12" Foreground="#888888" VerticalAlignment="Center"
                      IsVisible="{Binding LastCompletedAt, Converter={x:Static ObjectConverters.IsNotNull}}">
             <Run Text="Last sync: " />
