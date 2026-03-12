@@ -21,8 +21,9 @@ public partial class MainWindow : Window
         _eventsBound = true;
 
         var tabControl = this.FindControl<TabControl>("MainTabs")!;
-        tabControl.SelectionChanged += (_, _) =>
+        tabControl.SelectionChanged += (sender, args) =>
         {
+            if (args.Source != tabControl) return;
             if (DataContext is MainViewModel vm && tabControl.SelectedIndex == 1)
                 vm.OnHistoryTabActivated();
         };
