@@ -54,7 +54,6 @@ internal static class Program
             {
                 Dispatcher.UIThread.UnhandledException += (_, e) =>
                 {
-                    Console.Error.WriteLine($"[UI-THREAD] {e.Exception}");
                     e.Handled = true;
                     ShowCrashDialog(e.Exception);
                 };
@@ -91,16 +90,12 @@ internal static class Program
     private static void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
         if (e.ExceptionObject is Exception ex)
-        {
-            Console.Error.WriteLine($"[UNHANDLED] {ex}");
             ShowCrashDialog(ex);
-        }
     }
 
     private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
         e.SetObserved();
-        Console.Error.WriteLine($"[UNOBSERVED] {e.Exception}");
         ShowCrashDialog(e.Exception);
     }
 
