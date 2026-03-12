@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using SyncHistory;
 
@@ -43,19 +44,26 @@ public partial class HistoryViewModel : ViewModelBase
     {
         try
         {
-            SelectedRecord = await _reader.LoadRunAsync(fileName);
-            SelectedRecordErrors = SelectedRecord is null ? [] :
-                SelectedRecord.Errors
-                    .GroupBy(e => e.Category)
-                    .Select(g => new ErrorGroupViewModel(
-                        FriendlyCategory(g.Key),
-                        g.Select(e => $"{e.PcaItemNum}: {e.Detail}").ToList()))
-                    .ToList();
+            var record = await _reader.LoadRunAsync(fileName);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                SelectedRecord = record;
+                SelectedRecordErrors = SelectedRecord is null ? [] :
+                    SelectedRecord.Errors
+                        .GroupBy(e => e.Category)
+                        .Select(g => new ErrorGroupViewModel(
+                            FriendlyCategory(g.Key),
+                            g.Select(e => $"{e.PcaItemNum}: {e.Detail}").ToList()))
+                        .ToList();
+            });
         }
         catch (Exception)
         {
-            SelectedRecord = null;
-            SelectedRecordErrors = [];
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                SelectedRecord = null;
+                SelectedRecordErrors = [];
+            });
         }
     }
 
