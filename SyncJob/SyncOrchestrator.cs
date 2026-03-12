@@ -10,7 +10,7 @@ namespace SyncJob;
 /// <summary>
 /// Executes one delta sync run. Injected into SyncService.
 /// </summary>
-internal sealed class SyncOrchestrator
+public sealed class SyncOrchestrator
 {
     private const int BatchSize = 250;
 
