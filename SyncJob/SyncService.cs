@@ -19,7 +19,7 @@ public sealed class SyncService : IDisposable
 
     public event EventHandler<SyncResult>? SyncCompleted;
 
-    internal SyncService(SyncOrchestrator orchestrator, ILogger<SyncService> logger)
+    public SyncService(SyncOrchestrator orchestrator, ILogger<SyncService> logger)
     {
         _orchestrator = orchestrator;
         _logger = logger;
