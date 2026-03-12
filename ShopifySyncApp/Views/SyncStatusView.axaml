@@ -23,8 +23,16 @@
                    IsVisible="{Binding IsRunning}"
                    Height="4" />
 
-      <!-- Status row: dot + text -->
-      <StackPanel Orientation="Horizontal" Spacing="10">
+      <!-- Status row: button + dot + text -->
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <Button Command="{Binding SyncNowCommand}"
+                IsEnabled="{Binding !IsRunning}"
+                Classes="accent"
+                Padding="12 8"
+                VerticalAlignment="Center">
+          Sync Now
+        </Button>
+
         <!-- Grey dot: never synced + idle -->
         <Ellipse Width="10" Height="10" Fill="#999999"
                  VerticalAlignment="Center">
@@ -92,14 +100,6 @@
           </TextBlock>
         </StackPanel>
       </StackPanel>
-
-      <!-- Sync Now button -->
-      <Button Command="{Binding SyncNowCommand}"
-              IsEnabled="{Binding !IsRunning}"
-              Classes="accent"
-              Padding="12 8">
-        Sync Now
-      </Button>
 
       <!-- Expander: last sync details -->
       <Expander Header="Last sync details"
