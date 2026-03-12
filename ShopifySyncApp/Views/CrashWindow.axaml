@@ -1,0 +1,16 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ShopifySyncApp.Views.CrashWindow"
+        Title="Unhandled Error"
+        Width="560" Height="360"
+        WindowStartupLocation="CenterScreen"
+        CanResize="True">
+  <DockPanel Margin="16">
+    <TextBlock DockPanel.Dock="Top" Text="An unexpected error occurred. The application will close."
+               FontWeight="Bold" Margin="0,0,0,8" TextWrapping="Wrap" />
+    <ScrollViewer>
+      <TextBox Name="ErrorText" IsReadOnly="True" TextWrapping="Wrap"
+               AcceptsReturn="True" FontFamily="Monospace" />
+    </ScrollViewer>
+  </DockPanel>
+</Window>
