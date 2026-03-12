@@ -2,10 +2,11 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="ShopifySyncApp.Views.SettingsWindow"
         Title="Settings"
-        Width="480" Height="420"
+        Width="480" Height="520"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
 
+  <ScrollViewer>
   <StackPanel Margin="16" Spacing="12">
 
     <TextBlock Text="Shopify Store URL" />
@@ -42,4 +43,5 @@
                TextWrapping="Wrap" />
 
   </StackPanel>
+  </ScrollViewer>
 </Window>
