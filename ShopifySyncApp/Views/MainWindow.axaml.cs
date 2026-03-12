@@ -1,5 +1,4 @@
 using Avalonia.Controls;
-using Microsoft.Extensions.DependencyInjection;
 using ShopifySyncApp.ViewModels;
 
 namespace ShopifySyncApp.Views;
@@ -26,14 +25,6 @@ public partial class MainWindow : Window
             if (args.Source != tabControl) return;
             if (DataContext is MainViewModel vm && tabControl.SelectedIndex == 1)
                 vm.OnHistoryTabActivated();
-        };
-
-        var settingsBtn = this.FindControl<Button>("SettingsButton")!;
-        settingsBtn.Click += (_, _) =>
-        {
-            var vm = Program.Services.GetRequiredService<SettingsViewModel>();
-            var win = new SettingsWindow { DataContext = vm };
-            win.ShowDialog(this);
         };
     }
 }

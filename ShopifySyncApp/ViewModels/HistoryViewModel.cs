@@ -1,3 +1,4 @@
+using System.IO;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using SyncHistory;
@@ -9,9 +10,12 @@ public partial class HistoryViewModel : ViewModelBase
     private readonly HistoryReader _reader;
 
     [ObservableProperty] private IReadOnlyList<string> _runFileNames = [];
-    [ObservableProperty] private string? _selectedFileName;
+    [ObservableProperty] private string? _selectedDisplayName;
     [ObservableProperty] private SyncHistoryRecord? _selectedRecord;
     [ObservableProperty] private IReadOnlyList<ErrorGroupViewModel> _selectedRecordErrors = [];
+
+    public IReadOnlyList<string> DisplayFileNames =>
+        RunFileNames.Select(f => Path.GetFileNameWithoutExtension(f)).ToList();
 
     public HistoryViewModel(HistoryReader reader)
     {
@@ -21,15 +25,17 @@ public partial class HistoryViewModel : ViewModelBase
     public void Refresh()
     {
         RunFileNames = _reader.ListRuns();
-        if (SelectedFileName is not null && !RunFileNames.Contains(SelectedFileName))
+        OnPropertyChanged(nameof(DisplayFileNames));
+        if (SelectedDisplayName is not null &&
+            !DisplayFileNames.Contains(SelectedDisplayName))
         {
-            SelectedFileName = null;
+            SelectedDisplayName = null;
             SelectedRecord = null;
             SelectedRecordErrors = [];
         }
     }
 
-    partial void OnSelectedFileNameChanged(string? value)
+    partial void OnSelectedDisplayNameChanged(string? value)
     {
         if (value is null)
         {
@@ -37,7 +43,10 @@ public partial class HistoryViewModel : ViewModelBase
             SelectedRecordErrors = [];
             return;
         }
-        _ = LoadSelectedAsync(value);
+        var real = RunFileNames.FirstOrDefault(f =>
+            Path.GetFileNameWithoutExtension(f) == value);
+        if (real is not null)
+            _ = LoadSelectedAsync(real);
     }
 
     private async Task LoadSelectedAsync(string fileName)

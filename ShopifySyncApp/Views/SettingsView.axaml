@@ -1,0 +1,68 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ShopifySyncApp.Views.SettingsView">
+
+  <ScrollViewer Padding="20 24">
+    <StackPanel Spacing="14" MaxWidth="420">
+
+      <TextBlock Text="Shopify" FontWeight="SemiBold" FontSize="13" Foreground="#555555" />
+
+      <StackPanel Spacing="4">
+        <TextBlock Text="Store URL" FontSize="12" FontWeight="SemiBold" Foreground="#555555" />
+        <TextBox Text="{Binding StoreUrl}" />
+        <TextBlock Text="{Binding StoreUrlError}" Foreground="#c42b1c" FontSize="12"
+                   IsVisible="{Binding StoreUrlError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      </StackPanel>
+
+      <StackPanel Spacing="4">
+        <TextBlock Text="Access Token" FontSize="12" FontWeight="SemiBold" Foreground="#555555" />
+        <TextBox Text="{Binding AccessToken}" PasswordChar="*" />
+        <TextBlock Text="{Binding AccessTokenError}" Foreground="#c42b1c" FontSize="12"
+                   IsVisible="{Binding AccessTokenError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      </StackPanel>
+
+      <Separator Margin="0,4" />
+
+      <TextBlock Text="Database" FontWeight="SemiBold" FontSize="13" Foreground="#555555" />
+
+      <StackPanel Spacing="4">
+        <TextBlock Text="PCAmerica Connection String" FontSize="12" FontWeight="SemiBold" Foreground="#555555" />
+        <TextBox Text="{Binding PcaConnectionString}" />
+      </StackPanel>
+
+      <StackPanel Spacing="4">
+        <TextBlock Text="ShopifySync Connection String" FontSize="12" FontWeight="SemiBold" Foreground="#555555" />
+        <TextBox Text="{Binding ShopifySyncConnectionString}" />
+      </StackPanel>
+
+      <Separator Margin="0,4" />
+
+      <TextBlock Text="Scheduling" FontWeight="SemiBold" FontSize="13" Foreground="#555555" />
+
+      <StackPanel Spacing="4">
+        <TextBlock Text="Sync interval (minutes)" FontSize="12" FontWeight="SemiBold" Foreground="#555555" />
+        <NumericUpDown Value="{Binding PollIntervalMinutes}" Minimum="1" Increment="1"
+                       FormatString="0" Width="100" HorizontalAlignment="Left" />
+        <TextBlock Text="{Binding PollIntervalError}" Foreground="#c42b1c" FontSize="12"
+                   IsVisible="{Binding PollIntervalError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      </StackPanel>
+
+      <CheckBox IsChecked="{Binding AutoStartOnLaunch}" Margin="0,4,0,0">
+        Auto-start sync on launch
+      </CheckBox>
+
+      <Button Command="{Binding SaveCommand}"
+              IsEnabled="{Binding !IsSaving}"
+              HorizontalAlignment="Left"
+              Margin="0,8,0,0"
+              Classes="accent">
+        Save
+      </Button>
+
+      <TextBlock Text="{Binding RestartNotice}" Foreground="DarkOrange"
+                 IsVisible="{Binding RestartNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                 TextWrapping="Wrap" />
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

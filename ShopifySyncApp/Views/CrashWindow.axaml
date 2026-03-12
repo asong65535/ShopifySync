@@ -5,12 +5,15 @@
         Width="560" Height="360"
         WindowStartupLocation="CenterScreen"
         CanResize="True">
-  <DockPanel Margin="16">
-    <TextBlock DockPanel.Dock="Top" Text="An unexpected error occurred. The application will close."
-               FontWeight="Bold" Margin="0,0,0,8" TextWrapping="Wrap" />
+  <DockPanel Margin="20">
+    <Border DockPanel.Dock="Top" Background="#fde7e9" BorderBrush="#c42b1c"
+            BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,12">
+      <TextBlock Text="An unexpected error occurred. The application will close."
+                 FontWeight="SemiBold" FontSize="13" Foreground="#c42b1c" TextWrapping="Wrap" />
+    </Border>
     <ScrollViewer>
       <TextBox Name="ErrorText" IsReadOnly="True" TextWrapping="Wrap"
-               AcceptsReturn="True" FontFamily="Monospace" />
+               AcceptsReturn="True" FontFamily="Consolas,Monospace" FontSize="12" />
     </ScrollViewer>
   </DockPanel>
 </Window>
