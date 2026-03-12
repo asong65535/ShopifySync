@@ -57,6 +57,46 @@ internal static class ShopifyGraphql
         "product { id variants(first: 1) { edges { node { id sku inventoryItem { id } } } } } " +
         "userErrors { field message } } }";
 
+    // Bulk query to fetch all products with their variant SKU and inventory item ID.
+    // Result JSONL uses parent/child format: product lines, then variant lines with __parentId.
+    public const string BulkQueryProducts = """
+        {
+          products {
+            edges {
+              node {
+                id
+                variants(first: 1) {
+                  edges {
+                    node {
+                      id
+                      sku
+                      inventoryItem {
+                        id
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """;
+
+    public const string BulkOperationRunQuery = """
+        mutation bulkOperationRunQuery($query: String!) {
+          bulkOperationRunQuery(query: $query) {
+            bulkOperation {
+              id
+              status
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+        """;
+
     public const string PollBulkOperationById = """
         query pollBulkOp($id: ID!) {
           node(id: $id) {

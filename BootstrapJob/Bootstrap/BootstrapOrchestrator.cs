@@ -13,6 +13,7 @@ internal sealed class BootstrapOrchestrator
     private readonly ShopifyClient _shopify;
     private readonly JsonlBuilder _jsonlBuilder;
     private readonly SyncMapWriter _syncMapWriter;
+    private readonly SyncMapBuilder _syncMapBuilder;
     private readonly IConfiguration _config;
 
     public BootstrapOrchestrator(
@@ -21,6 +22,7 @@ internal sealed class BootstrapOrchestrator
         ShopifyClient shopify,
         JsonlBuilder jsonlBuilder,
         SyncMapWriter syncMapWriter,
+        SyncMapBuilder syncMapBuilder,
         IConfiguration config)
     {
         _pcaDb = pcaDb;
@@ -28,6 +30,7 @@ internal sealed class BootstrapOrchestrator
         _shopify = shopify;
         _jsonlBuilder = jsonlBuilder;
         _syncMapWriter = syncMapWriter;
+        _syncMapBuilder = syncMapBuilder;
         _config = config;
     }
 
@@ -173,5 +176,121 @@ internal sealed class BootstrapOrchestrator
         Console.WriteLine($"  Negative clamped : {negativeClamped}");
         Console.WriteLine($"  SyncMap written  : {mapWritten:N0}");
         Console.WriteLine($"  Skipped/warnings : {mapSkipped}");
+    }
+
+    public async Task RunMapOnlyAsync(CancellationToken ct = default)
+    {
+        Console.WriteLine("*** MAP-ONLY MODE — reading Shopify products, no mutations ***\n");
+
+        var pollTimeoutMinutes = _config.GetValue<int>("Bootstrap:PollTimeoutMinutes", 30);
+
+        // ------------------------------------------------------------------
+        // Pre-flight: resolve location
+        // ------------------------------------------------------------------
+        var locationId = _config.GetValue<long>("Bootstrap:LocationId");
+        if (locationId == 0)
+        {
+            var locations = await _shopify.FetchLocationsAsync(ct);
+            if (locations.Count == 0)
+                throw new InvalidOperationException("No locations found in Shopify store.");
+
+            if (locations.Count == 1)
+            {
+                locationId = locations[0].Id;
+                Console.WriteLine($"      Auto-selected location id={locationId}\n");
+            }
+            else
+            {
+                Console.WriteLine("Multiple locations found — set Bootstrap:LocationId in appsettings.local.json:");
+                foreach (var loc in locations)
+                    Console.WriteLine($"  {loc.Id}");
+                return;
+            }
+        }
+
+        // Guard: if ProductSyncMap already has rows, abort
+        var existingCount = await _syncDb.ProductSyncMap.CountAsync(ct);
+        if (existingCount > 0)
+        {
+            Console.WriteLine($"ERROR — ProductSyncMap already contains {existingCount:N0} rows.");
+            Console.WriteLine("Re-run with --force --map-only to truncate and re-map.");
+            return;
+        }
+
+        // ------------------------------------------------------------------
+        // STEP 1: Load PCA items
+        // ------------------------------------------------------------------
+        Console.WriteLine("[1/4] Reading PCA inventory...");
+        var items = await _pcaDb.Inventory
+            .Where(x => !x.IsDeleted)
+            .Include(x => x.Skus)
+            .ToListAsync(ct);
+        Console.WriteLine($"      {items.Count:N0} active items loaded.\n");
+
+        // ------------------------------------------------------------------
+        // STEP 2: Submit bulk query for all Shopify products
+        // ------------------------------------------------------------------
+        Console.WriteLine("[2/4] Submitting bulk product query to Shopify...");
+        var bulkOpId = await _shopify.RunBulkQueryAsync(ShopifyGraphql.BulkQueryProducts, ct);
+        Console.WriteLine($"      Bulk query ID: {bulkOpId}\n");
+
+        // ------------------------------------------------------------------
+        // STEP 3: Poll until complete
+        // ------------------------------------------------------------------
+        Console.WriteLine("[3/4] Polling bulk query status...");
+        var timeout = TimeSpan.FromMinutes(pollTimeoutMinutes);
+        var deadline = DateTime.UtcNow + timeout;
+        var pollInterval = TimeSpan.FromSeconds(3);
+
+        string? resultUrl = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(pollInterval, ct);
+            var status = await _shopify.PollBulkOperationAsync(bulkOpId, ct);
+
+            if (status is null)
+            {
+                Console.WriteLine("      Status: pending...");
+                continue;
+            }
+
+            Console.WriteLine($"      Status: {status.Status}  Objects: {status.ObjectCount:N0}");
+
+            switch (status.Status)
+            {
+                case "COMPLETED":
+                    resultUrl = status.Url;
+                    Console.WriteLine($"      Completed. {status.ObjectCount:N0} objects processed.\n");
+                    goto done;
+
+                case "FAILED":
+                case "CANCELED":
+                case "CANCELING":
+                    throw new ShopifyApiException(
+                        $"Bulk query ended with status '{status.Status}'. ErrorCode: {status.ErrorCode}");
+            }
+        }
+
+        throw new TimeoutException(
+            $"Bulk query did not complete within {pollTimeoutMinutes} minutes.");
+
+        done:
+        if (resultUrl is null)
+            throw new ShopifyApiException("Bulk query completed but returned no result URL.");
+
+        // ------------------------------------------------------------------
+        // STEP 4: Download result and build ProductSyncMap
+        // ------------------------------------------------------------------
+        Console.WriteLine("[4/4] Downloading result and building ProductSyncMap...");
+        var resultStream = await _shopify.DownloadResultAsync(resultUrl, ct);
+
+        var (matched, unmatchedShopify) = await _syncMapBuilder.WriteAsync(resultStream, items, locationId, ct);
+
+        var unmatchedPca = items.Count - matched;
+        Console.WriteLine($"\n=== Map-only complete ===");
+        Console.WriteLine($"  PCA items loaded     : {items.Count:N0}");
+        Console.WriteLine($"  Shopify matched      : {matched:N0}");
+        Console.WriteLine($"  Shopify unmatched    : {unmatchedShopify}");
+        Console.WriteLine($"  PCA unmatched        : {unmatchedPca}");
     }
 }

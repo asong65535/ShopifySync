@@ -223,6 +223,21 @@ internal sealed class ShopifyClient
             ObjectCount: objectCount);
     }
 
+    public async Task<string> RunBulkQueryAsync(string query, CancellationToken ct = default)
+    {
+        var variables = new { query };
+
+        using var doc = await PostGraphqlAsync(ShopifyGraphql.BulkOperationRunQuery, variables, ct);
+        var root = doc.RootElement.GetProperty("data").GetProperty("bulkOperationRunQuery");
+
+        var errors = root.GetProperty("userErrors").EnumerateArray().ToList();
+        if (errors.Count > 0)
+            throw new ShopifyApiException(
+                $"bulkOperationRunQuery error: {errors[0].GetProperty("message").GetString()}");
+
+        return root.GetProperty("bulkOperation").GetProperty("id").GetString()!;
+    }
+
     public static long ParseGid(string gid)
     {
         var segment = gid.Split('/').Last();

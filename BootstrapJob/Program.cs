@@ -13,6 +13,7 @@ using SyncData;
 //   dotnet run                  — full import
 //   dotnet run -- --dry-run     — build JSONL only, no Shopify/SQL writes
 //   dotnet run -- --force       — truncate ProductSyncMap and re-import
+//   dotnet run -- --map-only      — populate ProductSyncMap from existing Shopify products (no mutations)
 //   dotnet run -- --list-locations — print Shopify locations and exit
 // -------------------------------------------------------------------------
 
@@ -21,6 +22,7 @@ Console.WriteLine("=== Shopify Bootstrap Import Job ===\n");
 // --- Args ---
 bool dryRun      = args.Contains("--dry-run");
 bool force       = args.Contains("--force");
+bool mapOnly     = args.Contains("--map-only");
 bool listLocs    = args.Contains("--list-locations");
 
 // --- Configuration ---
@@ -60,6 +62,7 @@ services.AddSyncDb(config);
 services.AddHttpClient<ShopifyClient>();
 services.AddTransient<JsonlBuilder>();
 services.AddTransient<SyncMapWriter>();
+services.AddTransient<SyncMapBuilder>();
 services.AddTransient<BootstrapOrchestrator>();
 
 var provider = services.BuildServiceProvider();
@@ -96,7 +99,10 @@ if (force)
 try
 {
     var orchestrator = scope.ServiceProvider.GetRequiredService<BootstrapOrchestrator>();
-    await orchestrator.RunAsync(dryRun, cts.Token);
+    if (mapOnly)
+        await orchestrator.RunMapOnlyAsync(cts.Token);
+    else
+        await orchestrator.RunAsync(dryRun, cts.Token);
     return 0;
 }
 catch (OperationCanceledException)
