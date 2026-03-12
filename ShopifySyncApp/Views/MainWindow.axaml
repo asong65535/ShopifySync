@@ -5,7 +5,7 @@
         x:Class="ShopifySyncApp.Views.MainWindow"
         Title="ShopifySync"
         Width="600" Height="500"
-        CanResize="False"
+        MinWidth="600" MinHeight="400"
         WindowStartupLocation="CenterScreen">
 
   <TabControl Name="MainTabs">
