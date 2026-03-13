@@ -32,7 +32,8 @@ appsettings.local.json
 ## Project docs (managed locally, not versioned)
 /CLAUDE.md
 /architecture.html
-docs/
+docs/*
+!docs/ARCHITECTURE-GUIDE.md
 
 ## Test output
 testout.txt
