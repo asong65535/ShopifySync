@@ -1,6 +1,6 @@
 # ShopifySync Architecture Guide
 
-This document explains how ShopifySync works — its structure, data flow, sync algorithm, and the design decisions behind them. For the machine-readable reference used by LLMs, see [ARCHITECTURE.md](ARCHITECTURE.md).
+This document explains how ShopifySync works — its structure, data flow, sync algorithm, and the design decisions behind them.
 
 ---
 
@@ -212,8 +212,8 @@ Environment variables override both files (standard .NET config precedence).
 ```json
 {
   "ConnectionStrings": {
-    "PcAmerica": "Server=.\\PCAMERICA;Database=CRELiquorStore;...",
-    "ShopifySync": "Server=.\\PCAMERICA;Database=ShopifySync;..."
+    "PcAmerica": "Server=.\\PCAMERICA;Database=YOUR-PCA-DATABASE;Integrated Security=True;TrustServerCertificate=True;",
+    "ShopifySync": "Server=.\\PCAMERICA;Database=ShopifySync;Integrated Security=True;TrustServerCertificate=True;"
   },
   "Shopify": {
     "StoreUrl": "your-store.myshopify.com",
@@ -269,18 +269,3 @@ Tests 11–21 use fake `HttpMessageHandler` subclasses that return predetermined
 ```bash
 dotnet test SyncHistory.Tests/
 ```
-
----
-
-## Phase Roadmap
-
-| Phase | Status | Description |
-|:---:|:---:|---|
-| 1 | Complete | PCAmerica table and column discovery |
-| 2 | Complete | EF Core models and read-only context |
-| 3 | Complete | SyncData schema, migrations, and BootstrapJob (1,584 products imported) |
-| 4 | Complete | SyncJob — PCA-to-Shopify delta sync engine |
-| 4b | Complete | Bidirectional sync — three-way delta, Shopify-to-PCA, PCA-wins conflicts |
-| 5 | Complete | Avalonia desktop UI — scheduler, manual sync, history, settings |
-| 6 | Future | Incremental bootstrap (auto-match new PCA items) |
-| 7 | Future | Production deployment and monitoring |

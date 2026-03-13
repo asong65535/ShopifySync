@@ -45,8 +45,8 @@ Copy the template below into `appsettings.local.json` in each runnable project (
 ```json
 {
   "ConnectionStrings": {
-    "PcAmerica": "Server=.\\YOUR-PCAMERICA-DATABASE;Database=ShopifySync;Integrated Security=True;TrustServerCertificate=True;",
-    "ShopifySync": "Server=.\\YOUR-SYNC-DATABASE;Database=ShopifySync;Integrated Security=True;TrustServerCertificate=True;"
+    "PcAmerica": "Server=.\\PCAMERICA;Database=YOUR-PCA-DATABASE;Integrated Security=True;TrustServerCertificate=True;",
+    "ShopifySync": "Server=.\\PCAMERICA;Database=ShopifySync;Integrated Security=True;TrustServerCertificate=True;"
   },
   "Shopify": {
     "StoreUrl": "your-store.myshopify.com",
