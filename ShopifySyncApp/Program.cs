@@ -71,6 +71,7 @@ internal static class Program
         services.AddSingleton<IConfiguration>(config);
 
         services.AddPcAmericaDb(config);
+        services.AddPcAmericaWriteDb(config);
         services.AddSyncDb(config);
         services.AddSyncJob(config);
 

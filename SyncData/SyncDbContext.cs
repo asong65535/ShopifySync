@@ -20,6 +20,8 @@ public class SyncDbContext : DbContext
             e.Property(x => x.PcaItemNum).HasMaxLength(50).IsRequired();
             e.Property(x => x.PcaUpc).HasMaxLength(100);
             e.Property(x => x.LastKnownQty).HasColumnType("decimal(18,4)");
+            e.Property(x => x.LastKnownPcaQty).HasColumnType("decimal(18,4)");
+            e.Property(x => x.LastKnownShopifyQty).HasColumnType("decimal(18,4)");
             e.Property(x => x.LastSyncedAt).HasColumnType("datetime2");
         });
 

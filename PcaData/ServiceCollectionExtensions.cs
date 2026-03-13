@@ -36,4 +36,22 @@ public static class ServiceCollectionExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// Registers <see cref="PcaWriteDbContext"/> for Shopify→PCA inventory writes.
+    /// Uses the raw PcAmerica connection string without ApplicationIntent=ReadOnly.
+    /// </summary>
+    public static IServiceCollection AddPcAmericaWriteDb(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var connStr = configuration.GetConnectionString("PcAmerica")
+            ?? throw new InvalidOperationException(
+                "Connection string 'PcAmerica' is missing from configuration.");
+
+        services.AddDbContext<PcaWriteDbContext>(opts =>
+            opts.UseSqlServer(connStr));
+
+        return services;
+    }
 }

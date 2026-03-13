@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using PcaData;
 using SyncData;
@@ -8,26 +9,32 @@ using SyncJob.Shopify;
 namespace SyncJob;
 
 /// <summary>
-/// Executes one delta sync run. Injected into SyncService.
+/// Executes one bidirectional delta sync run. Injected into SyncService via scope.
 /// </summary>
 public sealed class SyncOrchestrator
 {
     private const int BatchSize = 250;
 
     private readonly PcAmericaDbContext _pcaDb;
+    private readonly PcaWriteDbContext _pcaWriteDb;
     private readonly SyncDbContext _syncDb;
     private readonly ShopifyClient _shopify;
+    private readonly IConfiguration _config;
     private readonly ILogger<SyncOrchestrator> _logger;
 
     public SyncOrchestrator(
         PcAmericaDbContext pcaDb,
+        PcaWriteDbContext pcaWriteDb,
         SyncDbContext syncDb,
         ShopifyClient shopify,
+        IConfiguration config,
         ILogger<SyncOrchestrator> logger)
     {
         _pcaDb = pcaDb;
+        _pcaWriteDb = pcaWriteDb;
         _syncDb = syncDb;
         _shopify = shopify;
+        _config = config;
         _logger = logger;
     }
 
@@ -82,43 +89,140 @@ public sealed class SyncOrchestrator
             _logger.LogWarning("{Count} PCA items are not in the sync map (likely new items not yet bootstrapped).", notInSyncMap);
 
         // ------------------------------------------------------------------
-        // Step 4: Filter to changed items only
+        // Step 3c: Query Shopify inventory for all mapped items
         // ------------------------------------------------------------------
-        var changed = pcaItems
-            .Where(x => mapByItemNum.TryGetValue(x.ItemNum, out var m)
-                && (int)Math.Max(0, Math.Truncate(x.InStock)) != (int)Math.Max(0, Math.Truncate(m.LastKnownQty)))
-            .Select(x => (Item: x, Map: mapByItemNum[x.ItemNum]))
-            .ToList();
+        var shopifyQtyByItemId = new Dictionary<long, int>();
+        try
+        {
+            var groupedByLocation = syncMap
+                .GroupBy(m => m.ShopifyLocationId)
+                .ToList();
 
-        changedItems = changed.Count;
-        _logger.LogInformation("{Count} items have changed quantity.", changedItems);
+            foreach (var locationGroup in groupedByLocation)
+            {
+                var locationGid = ShopifyClient.ToGid("Location", locationGroup.Key);
+                var gids = locationGroup
+                    .Select(m => ShopifyClient.ToGid("InventoryItem", m.ShopifyInventoryItemId))
+                    .ToList();
+
+                for (int i = 0; i < gids.Count; i += BatchSize)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var batch = gids.Skip(i).Take(BatchSize).ToList();
+                    var batchResults = await _shopify.QueryInventoryLevelsAsync(batch, locationGid, ct);
+
+                    foreach (var kvp in batchResults)
+                        shopifyQtyByItemId[kvp.Key] = kvp.Value;
+
+                    // Rate limit: 1s delay between batches to preserve Shopify API budget
+                    if (i + BatchSize < gids.Count)
+                        await Task.Delay(1_000, ct);
+                }
+            }
+
+            _logger.LogInformation("Queried Shopify inventory for {Count} items.", shopifyQtyByItemId.Count);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to query Shopify inventory — aborting sync cycle.");
+            return new SyncResult
+            {
+                Success = false,
+                CompletedAt = DateTime.UtcNow,
+                FatalError = $"Shopify inventory query failed: {ex.Message}",
+                TotalPcaItems = totalPca,
+            };
+        }
+
+        // ------------------------------------------------------------------
+        // Step 4: Three-way delta comparison
+        // ------------------------------------------------------------------
+        var pcaToShopify = new List<(PcaData.Models.PcaInventoryItem Item, ProductSyncMap Map, int NewQty)>();
+        var shopifyToPca = new List<(ProductSyncMap Map, int NewQty)>();
+        var conflicts = new List<(PcaData.Models.PcaInventoryItem Item, ProductSyncMap Map, int NewQty, int ShopifyDelta)>();
+        int noChangeCount = 0;
+
+        var shopifyToPcaEnabled = _config.GetValue<bool>("BidirectionalSync:ShopifyToPcaEnabled");
+
+        foreach (var pcaItem in pcaItems)
+        {
+            if (!mapByItemNum.TryGetValue(pcaItem.ItemNum, out var map))
+                continue;
+
+            var pcaQty = (int)Math.Max(0, Math.Truncate(pcaItem.InStock));
+            var lastKnown = (int)Math.Max(0, Math.Truncate(map.LastKnownQty));
+            var pcaDelta = pcaQty - lastKnown;
+
+            if (!shopifyQtyByItemId.TryGetValue(map.ShopifyInventoryItemId, out var shopifyQty))
+            {
+                errors.Add(new SyncItemError
+                {
+                    PcaItemNum = pcaItem.ItemNum,
+                    Category = SyncErrorCategory.ShopifyQueryFailed,
+                    Detail = $"InventoryItem {map.ShopifyInventoryItemId} not in Shopify query response.",
+                });
+                shopifyQty = lastKnown;
+            }
+
+            var shopifyDelta = shopifyQty - lastKnown;
+
+            if (pcaDelta != 0 && shopifyDelta == 0)
+            {
+                pcaToShopify.Add((pcaItem, map, pcaQty));
+            }
+            else if (pcaDelta == 0 && shopifyDelta != 0)
+            {
+                if (shopifyToPcaEnabled)
+                    shopifyToPca.Add((map, shopifyQty));
+                else
+                    _logger.LogInformation(
+                        "Shopify delta detected for {ItemNum} (delta={Delta}) but ShopifyToPcaEnabled=false — skipping.",
+                        pcaItem.ItemNum, shopifyDelta);
+            }
+            else if (pcaDelta != 0 && shopifyDelta != 0)
+            {
+                conflicts.Add((pcaItem, map, pcaQty, shopifyDelta));
+            }
+            else
+            {
+                noChangeCount++;
+            }
+        }
+
+        changedItems = pcaToShopify.Count + shopifyToPca.Count + conflicts.Count;
+        _logger.LogInformation(
+            "Delta: {PcaToShopify} PCA→Shopify, {ShopifyToPca} Shopify→PCA, {Conflicts} conflicts, {NoChange} unchanged.",
+            pcaToShopify.Count, shopifyToPca.Count, conflicts.Count, noChangeCount);
 
         if (changedItems == 0)
         {
             await UpdateSyncStateAsync(ct);
-            return BuildResult(true, totalPca, changedItems, pushedToShopify, notInSyncMap, errors);
+            return BuildResult(true, totalPca, 0, 0, 0, 0, notInSyncMap, errors);
         }
 
         // ------------------------------------------------------------------
-        // Step 5: Process in batches
+        // Step 5: Push PCA→Shopify (includes conflicts where PCA wins)
         // ------------------------------------------------------------------
-        var successfulMaps = new List<(ProductSyncMap Map, int NewQty)>();
+        var shopifyPushItems = pcaToShopify
+            .Select(x => (Item: x.Item, Map: x.Map, NewQty: x.NewQty))
+            .Concat(conflicts.Select(x => (Item: x.Item, Map: x.Map, NewQty: x.NewQty)))
+            .ToList();
 
-        for (int i = 0; i < changed.Count; i += BatchSize)
+        var successfulShopifyPushes = new List<(ProductSyncMap Map, int NewQty)>();
+
+        for (int i = 0; i < shopifyPushItems.Count; i += BatchSize)
         {
             ct.ThrowIfCancellationRequested();
-
-            var batch = changed.Skip(i).Take(BatchSize).ToList();
+            var batch = shopifyPushItems.Skip(i).Take(BatchSize).ToList();
 
             var lines = batch.Select(pair =>
             {
-                var qty = (int)Math.Max(0, Math.Truncate(pair.Item.InStock));
                 var compareQty = (int)Math.Truncate(pair.Map.LastKnownQty);
                 return new InventoryQuantityLine
                 {
                     InventoryItemGid = ShopifyClient.ToGid("InventoryItem", pair.Map.ShopifyInventoryItemId),
                     LocationGid = ShopifyClient.ToGid("Location", pair.Map.ShopifyLocationId),
-                    Quantity = qty,
+                    Quantity = pair.NewQty,
                     CompareQuantity = compareQty,
                     PcaItemNum = pair.Item.ItemNum,
                 };
@@ -154,7 +258,7 @@ public sealed class SyncOrchestrator
                 if (result.IsSuccess)
                 {
                     var map = batchMapByItemNum[line.PcaItemNum];
-                    successfulMaps.Add((map, line.Quantity));
+                    successfulShopifyPushes.Add((map, line.Quantity));
                     pushedToShopify++;
                 }
                 else if (result.ErrorCode == "COMPARE_QUANTITY_STALE")
@@ -174,10 +278,10 @@ public sealed class SyncOrchestrator
                 }
             }
 
-            // Pass 2: unconditional retry for conflicts
+            // Pass 2: unconditional retry for compare-and-set conflicts
             if (conflictLines.Count > 0)
             {
-                _logger.LogWarning("{Count} compareQuantity conflicts — retrying unconditionally (BNM wins).", conflictLines.Count);
+                _logger.LogWarning("{Count} compareQuantity conflicts — retrying unconditionally.", conflictLines.Count);
 
                 Dictionary<string, InventorySetResult> retryResults;
                 try
@@ -203,14 +307,8 @@ public sealed class SyncOrchestrator
                     if (retryResult.IsSuccess)
                     {
                         var map = batchMapByItemNum[line.PcaItemNum];
-                        successfulMaps.Add((map, line.Quantity));
+                        successfulShopifyPushes.Add((map, line.Quantity));
                         pushedToShopify++;
-                        errors.Add(new SyncItemError
-                        {
-                            PcaItemNum = line.PcaItemNum,
-                            Category = SyncErrorCategory.ConflictOverwritten,
-                            Detail = "compareQuantity was stale; overwrote Shopify quantity with PCA value.",
-                        });
                     }
                     else
                     {
@@ -228,30 +326,116 @@ public sealed class SyncOrchestrator
         }
 
         // ------------------------------------------------------------------
-        // Step 8: Update LastKnownQty for all successfully pushed items
+        // Step 6: Push Shopify→PCA
         // ------------------------------------------------------------------
-        if (successfulMaps.Count > 0)
-        {
-            foreach (var (map, newQty) in successfulMaps)
-            {
-                var tracked = await _syncDb.ProductSyncMap.FindAsync([map.Id], ct);
-                if (tracked is not null)
-                {
-                    tracked.LastKnownQty = newQty;
-                    tracked.LastSyncedAt = DateTime.UtcNow;
-                }
-            }
+        var successfulPcaPushes = new List<(ProductSyncMap Map, int NewQty)>();
+        int pulledFromShopify = 0;
 
-            await _syncDb.SaveChangesAsync(ct);
-            _logger.LogInformation("Updated LastKnownQty for {Count} items.", successfulMaps.Count);
+        foreach (var (map, newQty) in shopifyToPca)
+        {
+            try
+            {
+                var entity = await _pcaWriteDb.Inventory.FindAsync([map.PcaItemNum], ct);
+                if (entity is null)
+                {
+                    _logger.LogWarning("PCA item {ItemNum} not found for Shopify→PCA write.", map.PcaItemNum);
+                    errors.Add(new SyncItemError
+                    {
+                        PcaItemNum = map.PcaItemNum,
+                        Category = SyncErrorCategory.PcaWriteFailed,
+                        Detail = "Item not found in PCA Inventory table.",
+                    });
+                    continue;
+                }
+
+                entity.InStock = newQty;
+                await _pcaWriteDb.SaveChangesAsync(ct);
+                successfulPcaPushes.Add((map, newQty));
+                pulledFromShopify++;
+                _logger.LogInformation("Shopify→PCA: {ItemNum} qty set to {Qty}.", map.PcaItemNum, newQty);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Failed to write Shopify delta to PCA for {ItemNum}.", map.PcaItemNum);
+                _pcaWriteDb.ChangeTracker.Clear();
+                errors.Add(new SyncItemError
+                {
+                    PcaItemNum = map.PcaItemNum,
+                    Category = SyncErrorCategory.PcaWriteFailed,
+                    Detail = ex.Message,
+                });
+            }
         }
 
         // ------------------------------------------------------------------
-        // Step 9: Update SyncState.LastPolledAt
+        // Step 7: Update LastKnown* for all successfully synced items
+        // ------------------------------------------------------------------
+
+        // PCA→Shopify successes
+        foreach (var (map, newQty) in successfulShopifyPushes)
+        {
+            var tracked = await _syncDb.ProductSyncMap.FindAsync([map.Id], ct);
+            if (tracked is not null)
+            {
+                var pcaItem = pcaItems.FirstOrDefault(x =>
+                    string.Equals(x.ItemNum, map.PcaItemNum, StringComparison.OrdinalIgnoreCase));
+                var pcaQty = pcaItem is not null
+                    ? (int)Math.Max(0, Math.Truncate(pcaItem.InStock))
+                    : newQty;
+
+                tracked.LastKnownQty = newQty;
+                tracked.LastKnownPcaQty = pcaQty;
+                tracked.LastKnownShopifyQty = newQty;
+                tracked.LastSyncedAt = DateTime.UtcNow;
+            }
+        }
+
+        // Shopify→PCA successes
+        foreach (var (map, newQty) in successfulPcaPushes)
+        {
+            var tracked = await _syncDb.ProductSyncMap.FindAsync([map.Id], ct);
+            if (tracked is not null)
+            {
+                shopifyQtyByItemId.TryGetValue(map.ShopifyInventoryItemId, out var shopifyQty);
+
+                tracked.LastKnownQty = newQty;
+                tracked.LastKnownPcaQty = newQty;
+                tracked.LastKnownShopifyQty = shopifyQty;
+                tracked.LastSyncedAt = DateTime.UtcNow;
+            }
+        }
+
+        // Log conflict details
+        int conflictsPcaWon = 0;
+        foreach (var (_, map, newQty, shopifyDelta) in conflicts)
+        {
+            if (successfulShopifyPushes.Any(s => s.Map.Id == map.Id))
+            {
+                conflictsPcaWon++;
+                errors.Add(new SyncItemError
+                {
+                    PcaItemNum = map.PcaItemNum,
+                    Category = SyncErrorCategory.ConflictOverwritten,
+                    Detail = $"Both sides changed. PCA won. Discarded Shopify delta={shopifyDelta}.",
+                });
+            }
+        }
+
+        if (successfulShopifyPushes.Count + successfulPcaPushes.Count > 0)
+        {
+            await _syncDb.SaveChangesAsync(ct);
+            _logger.LogInformation(
+                "Updated LastKnown* for {ShopifyPushes} Shopify pushes and {PcaPushes} PCA pushes.",
+                successfulShopifyPushes.Count, successfulPcaPushes.Count);
+        }
+
+        // ------------------------------------------------------------------
+        // Step 8: Update SyncState.LastPolledAt
         // ------------------------------------------------------------------
         await UpdateSyncStateAsync(ct);
 
-        return BuildResult(true, totalPca, changedItems, pushedToShopify, notInSyncMap, errors);
+        return BuildResult(true, totalPca, changedItems, pushedToShopify, pulledFromShopify,
+            conflictsPcaWon, notInSyncMap, errors);
     }
 
     private async Task UpdateSyncStateAsync(CancellationToken ct)
@@ -273,6 +457,8 @@ public sealed class SyncOrchestrator
         int totalPca,
         int changedItems,
         int pushedToShopify,
+        int pulledFromShopify,
+        int conflictsPcaWon,
         int notInSyncMap,
         List<SyncItemError> errors) => new()
     {
@@ -281,6 +467,8 @@ public sealed class SyncOrchestrator
         TotalPcaItems = totalPca,
         ChangedItems = changedItems,
         PushedToShopify = pushedToShopify,
+        PulledFromShopify = pulledFromShopify,
+        ConflictsPcaWon = conflictsPcaWon,
         NotInSyncMapCount = notInSyncMap,
         Errors = errors,
     };

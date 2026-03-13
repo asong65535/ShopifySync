@@ -21,4 +21,24 @@ internal static class ShopifyGraphql
         }
         """;
 
+    /// <summary>
+    /// Batch query for current inventory levels via the nodes query.
+    /// Variables: { ids: [ID!]!, locationId: ID! }
+    /// Returns up to 250 InventoryItems per call with their available quantity.
+    /// </summary>
+    public const string QueryInventoryLevels = """
+        query queryInventoryLevels($ids: [ID!]!, $locationId: ID!) {
+          nodes(ids: $ids) {
+            ... on InventoryItem {
+              id
+              inventoryLevel(locationId: $locationId) {
+                quantities(names: ["available"]) {
+                  name
+                  quantity
+                }
+              }
+            }
+          }
+        }
+        """;
 }

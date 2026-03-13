@@ -48,6 +48,7 @@ if (overrideConn is not null)
 // --- DI Setup ---
 var services = new ServiceCollection();
 services.AddPcAmericaDb(config);
+services.AddPcAmericaWriteDb(config);
 var provider = services.BuildServiceProvider();
 
 await using var scope = provider.CreateAsyncScope();
@@ -315,11 +316,6 @@ Console.WriteLine("=== Test run complete ===");
 
 Console.WriteLine("\n=== SyncJob Tests ===\n");
 
-// Helper: builds a fake HttpMessageHandler that returns a fixed JSON body.
-// Optionally delays the response to simulate slow Shopify API.
-static HttpMessageHandler FakeShopify(string responseJson) =>
-    new FakeHttpHandler(responseJson);
-
 static HttpMessageHandler FakeShopifyWithDelay(string responseJson, int delayMs) =>
     new CancellableFakeHandler(responseJson, delayMs);
 
@@ -353,6 +349,27 @@ static string ShopifyStale() => """
     }
     """;
 
+// Helper: builds a nodes query response with a single InventoryItem at the given quantity.
+static string ShopifyInventoryQueryResponse(long inventoryItemId, int quantity) => $$"""
+    {
+      "data": {
+        "nodes": [
+          {
+            "id": "gid://shopify/InventoryItem/{{inventoryItemId}}",
+            "inventoryLevel": {
+              "quantities": [
+                { "name": "available", "quantity": {{quantity}} }
+              ]
+            }
+          }
+        ]
+      }
+    }
+    """;
+
+// Helper: builds a nodes query response with an empty nodes array (no items).
+static string ShopifyInventoryQueryEmpty() => """{"data":{"nodes":[]}}""";
+
 // Helper: builds a response with one INVALID_INVENTORY_ITEM error at index 0.
 static string ShopifyNotFound() => """
     {
@@ -373,7 +390,12 @@ static string ShopifyNotFound() => """
 
 // Shared: seed a synthetic ProductSyncMap row pointing at a known PCA item, then clean up.
 // Returns the inserted row's Id, or 0 if no PCA items exist.
-async Task<(ProductSyncMap? row, string? pcaItemNum)> SeedSyncMapRowAsync(SyncDbContext db, PcAmericaDbContext pca)
+/// <summary>
+/// Borrows an existing ProductSyncMap row (matching a PCA item with stock > 0),
+/// overwrites its Shopify IDs and LastKnown values so the test sees a delta,
+/// and returns the modified row plus a snapshot for restoration.
+/// </summary>
+async Task<(ProductSyncMap? row, SyncMapSnapshot? snapshot)> SeedSyncMapRowAsync(SyncDbContext db, PcAmericaDbContext pca)
 {
     var item = await pca.Inventory
         .Where(x => !x.IsDeleted && x.InStock > 0)
@@ -382,31 +404,40 @@ async Task<(ProductSyncMap? row, string? pcaItemNum)> SeedSyncMapRowAsync(SyncDb
 
     if (item is null) return (null, null);
 
+    var row = await db.ProductSyncMap
+        .FirstOrDefaultAsync(m => m.PcaItemNum == item.ItemNum);
+
+    if (row is null) return (null, null);
+
+    // Snapshot original values for restoration
+    var snapshot = new SyncMapSnapshot(
+        row.ShopifyInventoryItemId, row.ShopifyLocationId,
+        row.LastKnownQty, row.LastKnownPcaQty, row.LastKnownShopifyQty, row.LastSyncedAt);
+
     // Use a LastKnownQty that differs from InStock so it's always "changed"
     var differentQty = item.InStock + 99;
-
-    var row = new ProductSyncMap
-    {
-        PcaItemNum             = item.ItemNum,
-        PcaUpc                 = null,
-        ShopifyProductId       = 1,
-        ShopifyVariantId       = 2,
-        ShopifyInventoryItemId = 1001,
-        ShopifyLocationId      = 88892145881L,
-        LastKnownQty           = differentQty,
-        LastSyncedAt           = DateTime.UtcNow.AddDays(-1),
-    };
-    db.ProductSyncMap.Add(row);
+    row.ShopifyInventoryItemId = 1001;
+    row.ShopifyLocationId = 88892145881L;
+    row.LastKnownQty = differentQty;
+    row.LastKnownPcaQty = differentQty;
+    row.LastKnownShopifyQty = differentQty;
+    row.LastSyncedAt = DateTime.UtcNow.AddDays(-1);
     await db.SaveChangesAsync();
-    return (row, item.ItemNum);
+
+    return (row, snapshot);
 }
 
-async Task CleanupSyncMapRowAsync(SyncDbContext db, int id)
+async Task RestoreSyncMapRowAsync(SyncDbContext db, int id, SyncMapSnapshot snapshot)
 {
     var row = await db.ProductSyncMap.FindAsync(id);
     if (row is not null)
     {
-        db.ProductSyncMap.Remove(row);
+        row.ShopifyInventoryItemId = snapshot.ShopifyInventoryItemId;
+        row.ShopifyLocationId = snapshot.ShopifyLocationId;
+        row.LastKnownQty = snapshot.LastKnownQty;
+        row.LastKnownPcaQty = snapshot.LastKnownPcaQty;
+        row.LastKnownShopifyQty = snapshot.LastKnownShopifyQty;
+        row.LastSyncedAt = snapshot.LastSyncedAt;
         await db.SaveChangesAsync();
     }
 }
@@ -415,7 +446,17 @@ async Task CleanupSyncMapRowAsync(SyncDbContext db, int id)
 // Build a minimal logging factory (suppresses noise in test output).
 var loggerFactory = LoggerFactory.Create(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
 
-SyncOrchestrator BuildOrchestrator(SyncDbContext syncDbCtx, HttpMessageHandler handler)
+PcaWriteDbContext BuildTestPcaWriteDb()
+{
+    var connStr = config.GetConnectionString("PcAmerica")
+        ?? throw new InvalidOperationException("Missing PcAmerica connection string.");
+    var opts = new DbContextOptionsBuilder<PcaWriteDbContext>()
+        .UseSqlServer(connStr)
+        .Options;
+    return new PcaWriteDbContext(opts);
+}
+
+SyncOrchestrator BuildOrchestrator(SyncDbContext syncDbCtx, HttpMessageHandler handler, PcaWriteDbContext? pcaWriteDb = null)
 {
     // Use the test constructor — bypasses Shopify config parsing, fake handler is injected directly.
     var http = new HttpClient(handler)
@@ -424,10 +465,13 @@ SyncOrchestrator BuildOrchestrator(SyncDbContext syncDbCtx, HttpMessageHandler h
         Timeout = Timeout.InfiniteTimeSpan, // let CancellationToken control cancellation, not HttpClient timeout
     };
     var shopifyClient = new SyncJob.Shopify.ShopifyClient(http);
+    var writeDb = pcaWriteDb ?? BuildTestPcaWriteDb();
     return new SyncOrchestrator(
         db,
+        writeDb,
         syncDbCtx,
         shopifyClient,
+        config,
         loggerFactory.CreateLogger<SyncOrchestrator>());
 }
 
@@ -440,7 +484,7 @@ Console.WriteLine("[TEST 11] Happy path — changed item pushed successfully..."
     await using var scope11 = syncProvider.CreateAsyncScope();
     var syncDb11 = scope11.ServiceProvider.GetRequiredService<SyncDbContext>();
 
-    var (seeded, _) = await SeedSyncMapRowAsync(syncDb11, db);
+    var (seeded, origSnapshot) = await SeedSyncMapRowAsync(syncDb11, db);
     if (seeded is null)
     {
         Console.WriteLine("  SKIP — no active PCA items with positive stock.\n");
@@ -449,7 +493,9 @@ Console.WriteLine("[TEST 11] Happy path — changed item pushed successfully..."
 
     try
     {
-        var orch = BuildOrchestrator(syncDb11, FakeShopify(ShopifySuccess()));
+        // Shopify query returns LastKnownQty (no Shopify-side delta), mutation succeeds
+        var queryJson = ShopifyInventoryQueryResponse(1001, (int)seeded.LastKnownQty);
+        var orch = BuildOrchestrator(syncDb11, new BidirectionalFakeHandler(queryJson, ShopifySuccess()));
         // Capture before RunAsync — orchestrator mutates the tracked entity in place
         var originalQty = seeded.LastKnownQty;
         var result = await orch.RunAsync(CancellationToken.None);
@@ -472,7 +518,7 @@ Console.WriteLine("[TEST 11] Happy path — changed item pushed successfully..."
     }
     finally
     {
-        await CleanupSyncMapRowAsync(syncDb11, seeded.Id);
+        await RestoreSyncMapRowAsync(syncDb11, seeded.Id, origSnapshot!);
     }
 }
 
@@ -497,23 +543,32 @@ Console.WriteLine("[TEST 12] No-change path — qty already matches, nothing pus
         goto test13;
     }
 
-    var row = new ProductSyncMap
+    var row = await syncDb12.ProductSyncMap
+        .FirstOrDefaultAsync(m => m.PcaItemNum == item.ItemNum);
+
+    if (row is null)
     {
-        PcaItemNum             = item.ItemNum,
-        ShopifyProductId       = 1,
-        ShopifyVariantId       = 2,
-        ShopifyInventoryItemId = 1002,
-        ShopifyLocationId      = 88892145881L,
-        LastKnownQty           = item.InStock,  // matches exactly — should not push
-        LastSyncedAt           = DateTime.UtcNow,
-    };
-    syncDb12.ProductSyncMap.Add(row);
+        Console.WriteLine("  SKIP — no sync map row for first PCA item.\n");
+        goto test13;
+    }
+
+    var snap12 = new SyncMapSnapshot(
+        row.ShopifyInventoryItemId, row.ShopifyLocationId,
+        row.LastKnownQty, row.LastKnownPcaQty, row.LastKnownShopifyQty, row.LastSyncedAt);
+
+    // Set LastKnownQty to match PCA InStock — no delta
+    row.LastKnownQty = item.InStock;
+    row.LastKnownPcaQty = item.InStock;
+    row.LastKnownShopifyQty = item.InStock;
+    row.LastSyncedAt = DateTime.UtcNow;
     await syncDb12.SaveChangesAsync();
 
     try
     {
-        // Handler that throws if called — it must NOT be called for this test
-        var orch = BuildOrchestrator(syncDb12, FakeShopify(ShopifySuccess()));
+        // Shopify query returns same qty as LastKnownQty — no delta on either side
+        var noChangeQty = (int)Math.Max(0, Math.Truncate(row.LastKnownQty));
+        var queryJson12 = ShopifyInventoryQueryResponse(row.ShopifyInventoryItemId, noChangeQty);
+        var orch = BuildOrchestrator(syncDb12, new BidirectionalFakeHandler(queryJson12, ShopifySuccess()));
         var result = await orch.RunAsync(CancellationToken.None);
 
         if (!result.Success)
@@ -529,7 +584,7 @@ Console.WriteLine("[TEST 12] No-change path — qty already matches, nothing pus
     }
     finally
     {
-        await CleanupSyncMapRowAsync(syncDb12, row.Id);
+        await RestoreSyncMapRowAsync(syncDb12, row.Id, snap12);
     }
 }
 
@@ -557,7 +612,7 @@ Console.WriteLine("[TEST 13] Not-in-sync-map path — PCA item skipped, counter 
 
     try
     {
-        var orch = BuildOrchestrator(syncDb13, FakeShopify(ShopifySuccess()));
+        var orch = BuildOrchestrator(syncDb13, new BidirectionalFakeHandler(ShopifyInventoryQueryEmpty(), ShopifySuccess()));
         var result = await orch.RunAsync(CancellationToken.None);
 
         if (!result.Success)
@@ -579,14 +634,14 @@ test14:
 // -------------------------------------------------------------------------
 // TEST 14: Conflict retry path — Shopify returns COMPARE_QUANTITY_STALE on
 //   first pass, success on unconditional retry
-//   Verifies: ConflictOverwritten in errors, item still counted as pushed
+//   Verifies: item counted as pushed after successful retry
 // -------------------------------------------------------------------------
 Console.WriteLine("[TEST 14] Conflict retry path — COMPARE_QUANTITY_STALE → retry succeeds...");
 {
     await using var scope14 = syncProvider.CreateAsyncScope();
     var syncDb14 = scope14.ServiceProvider.GetRequiredService<SyncDbContext>();
 
-    var (seeded, _) = await SeedSyncMapRowAsync(syncDb14, db);
+    var (seeded, origSnapshot) = await SeedSyncMapRowAsync(syncDb14, db);
     if (seeded is null)
     {
         Console.WriteLine("  SKIP — no active PCA items.\n");
@@ -595,21 +650,18 @@ Console.WriteLine("[TEST 14] Conflict retry path — COMPARE_QUANTITY_STALE → 
 
     try
     {
-        // First call returns STALE, second call (unconditional retry) returns success
-        var handler = new SequentialFakeHandler([ShopifyStale(), ShopifySuccess()]);
+        // Query returns LastKnownQty (no Shopify delta); mutations: first STALE, second success
+        var queryJson14 = ShopifyInventoryQueryResponse(seeded.ShopifyInventoryItemId, (int)seeded.LastKnownQty);
+        var handler = new BidirectionalSequentialHandler(queryJson14, [ShopifyStale(), ShopifySuccess()]);
         var orch = BuildOrchestrator(syncDb14, handler);
         var result = await orch.RunAsync(CancellationToken.None);
-
-        var conflictErrors = result.Errors.Where(e => e.Category == SyncErrorCategory.ConflictOverwritten).ToList();
 
         if (!result.Success)
             Console.WriteLine($"  FAIL — SyncResult.Success is false.\n");
         else if (result.PushedToShopify != 1)
             Console.WriteLine($"  FAIL — Expected PushedToShopify=1, got {result.PushedToShopify}\n");
-        else if (conflictErrors.Count != 1)
-            Console.WriteLine($"  FAIL — Expected 1 ConflictOverwritten error, got {conflictErrors.Count}\n");
         else
-            Console.WriteLine($"  PASS — Conflict retried, item pushed, ConflictOverwritten logged.\n");
+            Console.WriteLine($"  PASS — COMPARE_QUANTITY_STALE retried unconditionally, item pushed.\n");
     }
     catch (Exception ex)
     {
@@ -617,7 +669,7 @@ Console.WriteLine("[TEST 14] Conflict retry path — COMPARE_QUANTITY_STALE → 
     }
     finally
     {
-        await CleanupSyncMapRowAsync(syncDb14, seeded.Id);
+        await RestoreSyncMapRowAsync(syncDb14, seeded.Id, origSnapshot!);
     }
 }
 
@@ -631,7 +683,7 @@ Console.WriteLine("[TEST 15b] Shopify not-found error — item skipped, error re
     await using var scope15b = syncProvider.CreateAsyncScope();
     var syncDb15b = scope15b.ServiceProvider.GetRequiredService<SyncDbContext>();
 
-    var (seeded, _) = await SeedSyncMapRowAsync(syncDb15b, db);
+    var (seeded, origSnapshot) = await SeedSyncMapRowAsync(syncDb15b, db);
     if (seeded is null)
     {
         Console.WriteLine("  SKIP — no active PCA items.\n");
@@ -640,7 +692,8 @@ Console.WriteLine("[TEST 15b] Shopify not-found error — item skipped, error re
 
     try
     {
-        var orch = BuildOrchestrator(syncDb15b, FakeShopify(ShopifyNotFound()));
+        var queryJson15b = ShopifyInventoryQueryResponse(1001, (int)seeded.LastKnownQty);
+        var orch = BuildOrchestrator(syncDb15b, new BidirectionalFakeHandler(queryJson15b, ShopifyNotFound()));
         var originalQty15b = seeded.LastKnownQty;
         var result = await orch.RunAsync(CancellationToken.None);
         var notFoundErrors = result.Errors.Where(e => e.Category == SyncErrorCategory.NotFoundInShopify).ToList();
@@ -665,7 +718,7 @@ Console.WriteLine("[TEST 15b] Shopify not-found error — item skipped, error re
     }
     finally
     {
-        await CleanupSyncMapRowAsync(syncDb15b, seeded.Id);
+        await RestoreSyncMapRowAsync(syncDb15b, seeded.Id, origSnapshot!);
     }
 }
 
@@ -680,7 +733,7 @@ Console.WriteLine("[TEST 15] Slow Shopify response — cancellation token respec
     await using var scope15 = syncProvider.CreateAsyncScope();
     var syncDb15 = scope15.ServiceProvider.GetRequiredService<SyncDbContext>();
 
-    var (seeded, _) = await SeedSyncMapRowAsync(syncDb15, db);
+    var (seeded, origSnapshot) = await SeedSyncMapRowAsync(syncDb15, db);
     if (seeded is null)
     {
         Console.WriteLine("  SKIP — no active PCA items.\n");
@@ -719,7 +772,552 @@ Console.WriteLine("[TEST 15] Slow Shopify response — cancellation token respec
     }
     finally
     {
-        await CleanupSyncMapRowAsync(syncDb15, seeded.Id);
+        await RestoreSyncMapRowAsync(syncDb15, seeded.Id, origSnapshot!);
+    }
+}
+
+// -------------------------------------------------------------------------
+// TEST 17: Shopify-only delta — Shopify qty differs, PCA unchanged
+//   Verifies: PCA In_Stock updated with Shopify delta (when enabled)
+// -------------------------------------------------------------------------
+Console.WriteLine("[TEST 17] Shopify-only delta — Shopify change written to PCA...");
+{
+    await using var scope17 = syncProvider.CreateAsyncScope();
+    var syncDb17 = scope17.ServiceProvider.GetRequiredService<SyncDbContext>();
+
+    var item = await db.Inventory
+        .Where(x => !x.IsDeleted && x.InStock > 1)
+        .OrderBy(x => x.ItemNum)
+        .FirstOrDefaultAsync();
+
+    if (item is null)
+    {
+        Console.WriteLine("  SKIP — no active PCA items with stock > 1.\n");
+        goto test18;
+    }
+
+    var row = await syncDb17.ProductSyncMap
+        .FirstOrDefaultAsync(m => m.PcaItemNum == item.ItemNum);
+    if (row is null)
+    {
+        Console.WriteLine("  SKIP — no sync map row.\n");
+        goto test18;
+    }
+
+    var snap17 = new SyncMapSnapshot(
+        row.ShopifyInventoryItemId, row.ShopifyLocationId,
+        row.LastKnownQty, row.LastKnownPcaQty, row.LastKnownShopifyQty, row.LastSyncedAt);
+
+    var pcaQty = (int)Math.Max(0, Math.Truncate(item.InStock));
+    var shopifyQty = pcaQty - 1; // Simulate Shopify sold 1 unit
+
+    // Set LastKnownQty to match PCA — no PCA delta, only Shopify delta
+    row.LastKnownQty = pcaQty;
+    row.LastKnownPcaQty = pcaQty;
+    row.LastKnownShopifyQty = pcaQty;
+    row.LastSyncedAt = DateTime.UtcNow.AddDays(-1);
+    await syncDb17.SaveChangesAsync();
+
+    var testConfig17 = new ConfigurationBuilder()
+        .AddConfiguration(config)
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["BidirectionalSync:ShopifyToPcaEnabled"] = "true"
+        })
+        .Build();
+
+    try
+    {
+        var queryJson = ShopifyInventoryQueryResponse(row.ShopifyInventoryItemId, shopifyQty);
+        var handler = new BidirectionalFakeHandler(queryJson, ShopifySuccess());
+        var pcaWriteDb = BuildTestPcaWriteDb();
+
+        var orch = new SyncOrchestrator(
+            db, pcaWriteDb, syncDb17,
+            new SyncJob.Shopify.ShopifyClient(new HttpClient(handler)
+            {
+                BaseAddress = new Uri("https://fake.myshopify.com/admin/api/2025-10/"),
+                Timeout = Timeout.InfiniteTimeSpan,
+            }),
+            testConfig17,
+            loggerFactory.CreateLogger<SyncOrchestrator>());
+
+        var result = await orch.RunAsync(CancellationToken.None);
+
+        var pcaAfter = await pcaWriteDb.Inventory
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.ItemNum == item.ItemNum);
+
+        if (!result.Success)
+            Console.WriteLine($"  FAIL — SyncResult.Success is false. FatalError: {result.FatalError}\n");
+        else if (result.PulledFromShopify != 1)
+            Console.WriteLine($"  FAIL — Expected PulledFromShopify=1, got {result.PulledFromShopify}\n");
+        else if (pcaAfter?.InStock != shopifyQty)
+            Console.WriteLine($"  FAIL — PCA In_Stock expected {shopifyQty}, got {pcaAfter?.InStock}\n");
+        else
+            Console.WriteLine($"  PASS — Shopify delta applied to PCA. In_Stock: {pcaQty} → {shopifyQty}\n");
+
+        // Restore original PCA value
+        var restore = await pcaWriteDb.Inventory.FindAsync(item.ItemNum);
+        if (restore is not null)
+        {
+            restore.InStock = item.InStock;
+            await pcaWriteDb.SaveChangesAsync();
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  FAIL — Exception: {ex.Message}\n");
+    }
+    finally
+    {
+        await RestoreSyncMapRowAsync(syncDb17, row.Id, snap17);
+    }
+}
+
+// -------------------------------------------------------------------------
+// TEST 17b: ShopifyToPcaEnabled=false — Shopify delta detected but skipped
+//   Verifies: PCA In_Stock NOT changed, PulledFromShopify=0
+// -------------------------------------------------------------------------
+Console.WriteLine("[TEST 17b] ShopifyToPcaEnabled=false — detection only, no PCA write...");
+{
+    await using var scope17b = syncProvider.CreateAsyncScope();
+    var syncDb17b = scope17b.ServiceProvider.GetRequiredService<SyncDbContext>();
+
+    var item17b = await db.Inventory
+        .Where(x => !x.IsDeleted && x.InStock > 1)
+        .OrderBy(x => x.ItemNum)
+        .FirstOrDefaultAsync();
+
+    if (item17b is null)
+    {
+        Console.WriteLine("  SKIP — no active PCA items with stock > 1.\n");
+        goto test18;
+    }
+
+    var row17b = await syncDb17b.ProductSyncMap
+        .FirstOrDefaultAsync(m => m.PcaItemNum == item17b.ItemNum);
+    if (row17b is null)
+    {
+        Console.WriteLine("  SKIP — no sync map row.\n");
+        goto test18;
+    }
+
+    var snap17b = new SyncMapSnapshot(
+        row17b.ShopifyInventoryItemId, row17b.ShopifyLocationId,
+        row17b.LastKnownQty, row17b.LastKnownPcaQty, row17b.LastKnownShopifyQty, row17b.LastSyncedAt);
+
+    var pcaQty17b = (int)Math.Max(0, Math.Truncate(item17b.InStock));
+    var shopifyQty17b = pcaQty17b - 1;
+
+    row17b.LastKnownQty = pcaQty17b;
+    row17b.LastKnownPcaQty = pcaQty17b;
+    row17b.LastKnownShopifyQty = pcaQty17b;
+    row17b.LastSyncedAt = DateTime.UtcNow.AddDays(-1);
+    await syncDb17b.SaveChangesAsync();
+
+    // ShopifyToPcaEnabled defaults to false in appsettings.json — use base config
+    try
+    {
+        var queryJson17b = ShopifyInventoryQueryResponse(row17b.ShopifyInventoryItemId, shopifyQty17b);
+        var handler17b = new BidirectionalFakeHandler(queryJson17b, ShopifySuccess());
+        var pcaWriteDb17b = BuildTestPcaWriteDb();
+
+        var orch17b = new SyncOrchestrator(
+            db, pcaWriteDb17b, syncDb17b,
+            new SyncJob.Shopify.ShopifyClient(new HttpClient(handler17b)
+            {
+                BaseAddress = new Uri("https://fake.myshopify.com/admin/api/2025-10/"),
+                Timeout = Timeout.InfiniteTimeSpan,
+            }),
+            config, // ShopifyToPcaEnabled=false (default)
+            loggerFactory.CreateLogger<SyncOrchestrator>());
+
+        var result17b = await orch17b.RunAsync(CancellationToken.None);
+
+        var pcaAfter17b = await pcaWriteDb17b.Inventory
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.ItemNum == item17b.ItemNum);
+
+        if (!result17b.Success)
+            Console.WriteLine($"  FAIL — SyncResult.Success is false. FatalError: {result17b.FatalError}\n");
+        else if (result17b.PulledFromShopify != 0)
+            Console.WriteLine($"  FAIL — Expected PulledFromShopify=0 (disabled), got {result17b.PulledFromShopify}\n");
+        else if (pcaAfter17b?.InStock != item17b.InStock)
+            Console.WriteLine($"  FAIL — PCA In_Stock should be unchanged ({item17b.InStock}), got {pcaAfter17b?.InStock}\n");
+        else
+            Console.WriteLine($"  PASS — Shopify delta detected but skipped. PCA unchanged at {item17b.InStock}.\n");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  FAIL — Exception: {ex.Message}\n");
+    }
+    finally
+    {
+        await RestoreSyncMapRowAsync(syncDb17b, row17b.Id, snap17b);
+    }
+}
+
+test18:
+// -------------------------------------------------------------------------
+// TEST 18: Conflict — both sides changed, PCA wins
+//   Verifies: Shopify gets PCA value, PCA unchanged, conflict logged
+// -------------------------------------------------------------------------
+Console.WriteLine("[TEST 18] Conflict — both sides changed, PCA wins...");
+{
+    await using var scope18 = syncProvider.CreateAsyncScope();
+    var syncDb18 = scope18.ServiceProvider.GetRequiredService<SyncDbContext>();
+
+    var item = await db.Inventory
+        .Where(x => !x.IsDeleted && x.InStock > 2)
+        .OrderBy(x => x.ItemNum)
+        .FirstOrDefaultAsync();
+
+    if (item is null)
+    {
+        Console.WriteLine("  SKIP — no active PCA items with stock > 2.\n");
+        goto test19;
+    }
+
+    var row = await syncDb18.ProductSyncMap
+        .FirstOrDefaultAsync(m => m.PcaItemNum == item.ItemNum);
+    if (row is null)
+    {
+        Console.WriteLine("  SKIP — no sync map row.\n");
+        goto test19;
+    }
+
+    var snap18 = new SyncMapSnapshot(
+        row.ShopifyInventoryItemId, row.ShopifyLocationId,
+        row.LastKnownQty, row.LastKnownPcaQty, row.LastKnownShopifyQty, row.LastSyncedAt);
+
+    var pcaQty = (int)Math.Max(0, Math.Truncate(item.InStock));
+    var lastKnown = pcaQty + 5; // PCA delta = pcaQty - (pcaQty+5) = -5
+    var shopifyQty = lastKnown - 2; // Shopify delta = -2
+
+    row.LastKnownQty = lastKnown;
+    row.LastKnownPcaQty = lastKnown;
+    row.LastKnownShopifyQty = lastKnown;
+    row.LastSyncedAt = DateTime.UtcNow.AddDays(-1);
+    await syncDb18.SaveChangesAsync();
+
+    var testConfig18 = new ConfigurationBuilder()
+        .AddConfiguration(config)
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["BidirectionalSync:ShopifyToPcaEnabled"] = "true"
+        })
+        .Build();
+
+    try
+    {
+        var queryJson = ShopifyInventoryQueryResponse(row.ShopifyInventoryItemId, shopifyQty);
+        var handler = new BidirectionalFakeHandler(queryJson, ShopifySuccess());
+        var pcaWriteDb = BuildTestPcaWriteDb();
+
+        var orch = new SyncOrchestrator(
+            db, pcaWriteDb, syncDb18,
+            new SyncJob.Shopify.ShopifyClient(new HttpClient(handler)
+            {
+                BaseAddress = new Uri("https://fake.myshopify.com/admin/api/2025-10/"),
+                Timeout = Timeout.InfiniteTimeSpan,
+            }),
+            testConfig18,
+            loggerFactory.CreateLogger<SyncOrchestrator>());
+
+        var result = await orch.RunAsync(CancellationToken.None);
+
+        // Verify PCA value was NOT changed (PCA won → Shopify gets overwritten, PCA stays)
+        var pcaAfter = await pcaWriteDb.Inventory
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.ItemNum == item.ItemNum);
+
+        if (!result.Success)
+            Console.WriteLine($"  FAIL — SyncResult.Success is false. FatalError: {result.FatalError}\n");
+        else if (result.PushedToShopify != 1)
+            Console.WriteLine($"  FAIL — Expected PushedToShopify=1, got {result.PushedToShopify}\n");
+        else if (result.ConflictsPcaWon != 1)
+            Console.WriteLine($"  FAIL — Expected ConflictsPcaWon=1, got {result.ConflictsPcaWon}\n");
+        else if (pcaAfter?.InStock != item.InStock)
+            Console.WriteLine($"  FAIL — PCA In_Stock should be unchanged ({item.InStock}), got {pcaAfter?.InStock}\n");
+        else
+            Console.WriteLine($"  PASS — Conflict detected, PCA won. Shopify pushed to {pcaQty}, PCA unchanged at {item.InStock}.\n");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  FAIL — Exception: {ex.Message}\n");
+    }
+    finally
+    {
+        await RestoreSyncMapRowAsync(syncDb18, row.Id, snap18);
+    }
+}
+
+test19:
+// -------------------------------------------------------------------------
+// TEST 19: Shopify query failure — sync cycle aborts
+// -------------------------------------------------------------------------
+Console.WriteLine("[TEST 19] Shopify query failure — sync cycle aborts...");
+{
+    await using var scope19 = syncProvider.CreateAsyncScope();
+    var syncDb19 = scope19.ServiceProvider.GetRequiredService<SyncDbContext>();
+
+    var (seeded, origSnapshot) = await SeedSyncMapRowAsync(syncDb19, db);
+    if (seeded is null)
+    {
+        Console.WriteLine("  SKIP — no active PCA items.\n");
+        goto test20;
+    }
+
+    try
+    {
+        // Return HTTP 200 with a broken GraphQL response (missing 'data' key).
+        // Avoids the 3-retry × 5s delay that HTTP 500 would trigger.
+        var brokenResponse = """{"errors": [{"message": "Internal error"}]}""";
+        var handler = new FakeHttpHandler(brokenResponse);
+        var pcaWriteDb = BuildTestPcaWriteDb();
+
+        var orch = new SyncOrchestrator(
+            db, pcaWriteDb, syncDb19,
+            new SyncJob.Shopify.ShopifyClient(new HttpClient(handler)
+            {
+                BaseAddress = new Uri("https://fake.myshopify.com/admin/api/2025-10/"),
+                Timeout = Timeout.InfiniteTimeSpan,
+            }),
+            config,
+            loggerFactory.CreateLogger<SyncOrchestrator>());
+
+        var result = await orch.RunAsync(CancellationToken.None);
+
+        if (result.Success)
+            Console.WriteLine("  FAIL — Expected Success=false when Shopify query fails.\n");
+        else if (result.FatalError is null || !result.FatalError.Contains("Shopify"))
+            Console.WriteLine($"  FAIL — Expected FatalError mentioning Shopify, got: {result.FatalError}\n");
+        else
+            Console.WriteLine($"  PASS — Sync aborted. FatalError: {result.FatalError}\n");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  FAIL — Exception: {ex.Message}\n");
+    }
+    finally
+    {
+        await RestoreSyncMapRowAsync(syncDb19, seeded.Id, origSnapshot!);
+    }
+}
+
+test20:
+// -------------------------------------------------------------------------
+// TEST 20: PCA write failure — item logged as PcaWriteFailed
+// -------------------------------------------------------------------------
+Console.WriteLine("[TEST 20] PCA write failure — error recorded, other items unaffected...");
+{
+    await using var scope20 = syncProvider.CreateAsyncScope();
+    var syncDb20 = scope20.ServiceProvider.GetRequiredService<SyncDbContext>();
+
+    var item = await db.Inventory
+        .Where(x => !x.IsDeleted && x.InStock > 1)
+        .OrderBy(x => x.ItemNum)
+        .FirstOrDefaultAsync();
+
+    if (item is null)
+    {
+        Console.WriteLine("  SKIP — no active PCA items with stock > 1.\n");
+        goto test21;
+    }
+
+    var row = await syncDb20.ProductSyncMap
+        .FirstOrDefaultAsync(m => m.PcaItemNum == item.ItemNum);
+    if (row is null)
+    {
+        Console.WriteLine("  SKIP — no sync map row.\n");
+        goto test21;
+    }
+
+    var snap20 = new SyncMapSnapshot(
+        row.ShopifyInventoryItemId, row.ShopifyLocationId,
+        row.LastKnownQty, row.LastKnownPcaQty, row.LastKnownShopifyQty, row.LastSyncedAt);
+
+    var pcaQty = (int)Math.Max(0, Math.Truncate(item.InStock));
+    var shopifyQty = pcaQty - 1;
+
+    // Set LastKnownQty to match PCA — only Shopify delta
+    row.LastKnownQty = pcaQty;
+    row.LastKnownPcaQty = pcaQty;
+    row.LastKnownShopifyQty = pcaQty;
+    row.LastSyncedAt = DateTime.UtcNow.AddDays(-1);
+    await syncDb20.SaveChangesAsync();
+
+    var testConfig20 = new ConfigurationBuilder()
+        .AddConfiguration(config)
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["BidirectionalSync:ShopifyToPcaEnabled"] = "true"
+        })
+        .Build();
+
+    try
+    {
+        var queryJson = ShopifyInventoryQueryResponse(row.ShopifyInventoryItemId, shopifyQty);
+        var handler = new BidirectionalFakeHandler(queryJson, ShopifySuccess());
+
+        // Use a broken PcaWriteDbContext (bad connection string)
+        var badOpts = new DbContextOptionsBuilder<PcaWriteDbContext>()
+            .UseSqlServer("Server=NONEXISTENT;Database=FAKE;Connection Timeout=1")
+            .Options;
+        var badPcaWriteDb = new PcaWriteDbContext(badOpts);
+
+        var orch = new SyncOrchestrator(
+            db, badPcaWriteDb, syncDb20,
+            new SyncJob.Shopify.ShopifyClient(new HttpClient(handler)
+            {
+                BaseAddress = new Uri("https://fake.myshopify.com/admin/api/2025-10/"),
+                Timeout = Timeout.InfiniteTimeSpan,
+            }),
+            testConfig20,
+            loggerFactory.CreateLogger<SyncOrchestrator>());
+
+        var result = await orch.RunAsync(CancellationToken.None);
+        var pcaWriteErrors = result.Errors
+            .Where(e => e.Category == SyncErrorCategory.PcaWriteFailed)
+            .ToList();
+
+        if (!result.Success)
+            Console.WriteLine($"  FAIL — Expected Success=true (item-level failure, not fatal). FatalError: {result.FatalError}\n");
+        else if (result.PulledFromShopify != 0)
+            Console.WriteLine($"  FAIL — Expected PulledFromShopify=0 (write failed), got {result.PulledFromShopify}\n");
+        else if (pcaWriteErrors.Count != 1)
+            Console.WriteLine($"  FAIL — Expected 1 PcaWriteFailed error, got {pcaWriteErrors.Count}\n");
+        else
+            Console.WriteLine($"  PASS — PCA write failure recorded, sync still succeeded. Error: {pcaWriteErrors[0].Detail?[..Math.Min(80, pcaWriteErrors[0].Detail?.Length ?? 0)]}\n");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  FAIL — Exception: {ex.Message}\n");
+    }
+    finally
+    {
+        await RestoreSyncMapRowAsync(syncDb20, row.Id, snap20);
+    }
+}
+
+test21:
+// -------------------------------------------------------------------------
+// TEST 21: No false delta after Shopify→PCA write
+//   Run two consecutive syncs. First detects Shopify delta and writes to PCA.
+//   Second should detect no changes.
+// -------------------------------------------------------------------------
+Console.WriteLine("[TEST 21] No false delta after Shopify→PCA write...");
+{
+    await using var scope21 = syncProvider.CreateAsyncScope();
+    var syncDb21 = scope21.ServiceProvider.GetRequiredService<SyncDbContext>();
+
+    var item = await db.Inventory
+        .Where(x => !x.IsDeleted && x.InStock > 2)
+        .OrderBy(x => x.ItemNum)
+        .FirstOrDefaultAsync();
+
+    if (item is null)
+    {
+        Console.WriteLine("  SKIP — no active PCA items with stock > 2.\n");
+        goto syncJobDone;
+    }
+
+    var row = await syncDb21.ProductSyncMap
+        .FirstOrDefaultAsync(m => m.PcaItemNum == item.ItemNum);
+    if (row is null)
+    {
+        Console.WriteLine("  SKIP — no sync map row.\n");
+        goto syncJobDone;
+    }
+
+    var snap21 = new SyncMapSnapshot(
+        row.ShopifyInventoryItemId, row.ShopifyLocationId,
+        row.LastKnownQty, row.LastKnownPcaQty, row.LastKnownShopifyQty, row.LastSyncedAt);
+
+    var pcaQty = (int)Math.Max(0, Math.Truncate(item.InStock));
+    var shopifyQty = pcaQty - 1;
+
+    // Set LastKnownQty to match PCA — only Shopify delta
+    row.LastKnownQty = pcaQty;
+    row.LastKnownPcaQty = pcaQty;
+    row.LastKnownShopifyQty = pcaQty;
+    row.LastSyncedAt = DateTime.UtcNow.AddDays(-1);
+    await syncDb21.SaveChangesAsync();
+
+    var testConfig21 = new ConfigurationBuilder()
+        .AddConfiguration(config)
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["BidirectionalSync:ShopifyToPcaEnabled"] = "true"
+        })
+        .Build();
+
+    try
+    {
+        var pcaWriteDb = BuildTestPcaWriteDb();
+
+        // Run 1: Shopify at shopifyQty, PCA at pcaQty → Shopify→PCA write
+        var queryJson1 = ShopifyInventoryQueryResponse(row.ShopifyInventoryItemId, shopifyQty);
+        var handler1 = new BidirectionalFakeHandler(queryJson1, ShopifySuccess());
+        var orch1 = new SyncOrchestrator(
+            db, pcaWriteDb, syncDb21,
+            new SyncJob.Shopify.ShopifyClient(new HttpClient(handler1)
+            {
+                BaseAddress = new Uri("https://fake.myshopify.com/admin/api/2025-10/"),
+                Timeout = Timeout.InfiniteTimeSpan,
+            }),
+            testConfig21,
+            loggerFactory.CreateLogger<SyncOrchestrator>());
+
+        var result1 = await orch1.RunAsync(CancellationToken.None);
+
+        if (result1.PulledFromShopify != 1)
+        {
+            Console.WriteLine($"  FAIL — Run 1: Expected PulledFromShopify=1, got {result1.PulledFromShopify}\n");
+        }
+        else
+        {
+            // Run 2: Both sides now at shopifyQty → no delta
+            await using var scope21b = syncProvider.CreateAsyncScope();
+            var syncDb21b = scope21b.ServiceProvider.GetRequiredService<SyncDbContext>();
+            var pcaWriteDb2 = BuildTestPcaWriteDb();
+
+            var queryJson2 = ShopifyInventoryQueryResponse(row.ShopifyInventoryItemId, shopifyQty);
+            var handler2 = new BidirectionalFakeHandler(queryJson2, ShopifySuccess());
+            var orch2 = new SyncOrchestrator(
+                db, pcaWriteDb2, syncDb21b,
+                new SyncJob.Shopify.ShopifyClient(new HttpClient(handler2)
+                {
+                    BaseAddress = new Uri("https://fake.myshopify.com/admin/api/2025-10/"),
+                    Timeout = Timeout.InfiniteTimeSpan,
+                }),
+                testConfig21,
+                loggerFactory.CreateLogger<SyncOrchestrator>());
+
+            var result2 = await orch2.RunAsync(CancellationToken.None);
+
+            if (result2.ChangedItems != 0)
+                Console.WriteLine($"  FAIL — Run 2: Expected ChangedItems=0 (no false delta), got {result2.ChangedItems}\n");
+            else
+                Console.WriteLine($"  PASS — No false delta on second run. Run 1 pulled 1 from Shopify, Run 2 detected 0 changes.\n");
+        }
+
+        // Restore original PCA value
+        var restore = await pcaWriteDb.Inventory.FindAsync(item.ItemNum);
+        if (restore is not null)
+        {
+            restore.InStock = item.InStock;
+            await pcaWriteDb.SaveChangesAsync();
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  FAIL — Exception: {ex.Message}\n");
+    }
+    finally
+    {
+        await RestoreSyncMapRowAsync(syncDb21, row.Id, snap21);
     }
 }
 
@@ -776,3 +1374,45 @@ sealed class SequentialFakeHandler(IReadOnlyList<string> responses) : HttpMessag
         });
     }
 }
+
+/// <summary>
+/// Returns different responses for inventory query vs mutation requests.
+/// Inspects the request body to determine which response to return.
+/// </summary>
+sealed class BidirectionalFakeHandler(string queryResponse, string mutationResponse) : HttpMessageHandler
+{
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken ct)
+    {
+        var body = await request.Content!.ReadAsStringAsync(ct);
+        var json = body.Contains("queryInventoryLevels") ? queryResponse : mutationResponse;
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        };
+    }
+}
+
+sealed class BidirectionalSequentialHandler(string queryResponse, IReadOnlyList<string> mutationResponses) : HttpMessageHandler
+{
+    private int _mutationIndex;
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken ct)
+    {
+        var body = await request.Content!.ReadAsStringAsync(ct);
+        string json;
+        if (body.Contains("queryInventoryLevels"))
+            json = queryResponse;
+        else
+            json = mutationResponses[Math.Min(_mutationIndex++, mutationResponses.Count - 1)];
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        };
+    }
+}
+
+record SyncMapSnapshot(
+    long ShopifyInventoryItemId, long ShopifyLocationId,
+    decimal LastKnownQty, decimal LastKnownPcaQty, decimal LastKnownShopifyQty, DateTime LastSyncedAt);

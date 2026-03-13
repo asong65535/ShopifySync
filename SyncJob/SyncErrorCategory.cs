@@ -16,4 +16,10 @@ public enum SyncErrorCategory
 
     /// <summary>Unconditional retry also failed with a Shopify error.</summary>
     RetryFailed,
+
+    /// <summary>Failed to update PCA In_Stock from Shopify delta.</summary>
+    PcaWriteFailed,
+
+    /// <summary>Failed to read Shopify inventory for this item.</summary>
+    ShopifyQueryFailed,
 }

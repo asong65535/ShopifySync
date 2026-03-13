@@ -19,7 +19,7 @@ public sealed class HistoryWriterReaderTests : IDisposable
         var writer = MakeWriter();
         var at = new DateTime(2026, 3, 11, 14, 32, 0, DateTimeKind.Utc);
 
-        await writer.WriteAsync(true, at, 10, 2, 2, 0, [], null);
+        await writer.WriteAsync(true, at, 10, 2, 2, 0, 0, 0, [], null);
 
         var files = Directory.GetFiles(_tempDir, "*_UTC.json");
         Assert.Single(files);
@@ -34,7 +34,7 @@ public sealed class HistoryWriterReaderTests : IDisposable
         var at = new DateTime(2026, 3, 11, 14, 32, 0, DateTimeKind.Utc);
         var errors = new[] { ("ITEM001", "RetryFailed", (string?)"some detail") };
 
-        await writer.WriteAsync(false, at, 100, 5, 4, 1, errors, "fatal msg");
+        await writer.WriteAsync(false, at, 100, 5, 4, 1, 2, 1, errors, "fatal msg");
 
         var files = reader.ListRuns();
         Assert.Single(files);
@@ -47,6 +47,8 @@ public sealed class HistoryWriterReaderTests : IDisposable
         Assert.Equal(100, record.TotalPcaItems);
         Assert.Equal(5, record.ChangedItems);
         Assert.Equal(4, record.PushedToShopify);
+        Assert.Equal(1, record.PulledFromShopify);
+        Assert.Equal(2, record.ConflictsPcaWon);
         Assert.Equal(1, record.NotInSyncMapCount);
         Assert.Equal("fatal msg", record.FatalError);
         Assert.Single(record.Errors);
@@ -70,8 +72,8 @@ public sealed class HistoryWriterReaderTests : IDisposable
         var t1 = new DateTime(2026, 3, 11, 10, 0, 0, DateTimeKind.Utc);
         var t2 = new DateTime(2026, 3, 11, 14, 0, 0, DateTimeKind.Utc);
 
-        await writer.WriteAsync(true, t1, 0, 0, 0, 0, [], null);
-        await writer.WriteAsync(true, t2, 0, 0, 0, 0, [], null);
+        await writer.WriteAsync(true, t1, 0, 0, 0, 0, 0, 0, [], null);
+        await writer.WriteAsync(true, t2, 0, 0, 0, 0, 0, 0, [], null);
 
         var files = MakeReader().ListRuns();
         Assert.Equal(2, files.Count);

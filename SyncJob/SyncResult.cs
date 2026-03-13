@@ -14,6 +14,12 @@ public sealed class SyncResult
     public int ChangedItems { get; init; }
     public int PushedToShopify { get; init; }
 
+    /// <summary>Items where a Shopify delta was applied to PCA.</summary>
+    public int PulledFromShopify { get; init; }
+
+    /// <summary>Items where both sides changed and PCA won (Shopify delta discarded).</summary>
+    public int ConflictsPcaWon { get; init; }
+
     /// <summary>Items with no ProductSyncMap row — expected when PCA has new items not yet in Shopify.</summary>
     public int NotInSyncMapCount { get; init; }
 

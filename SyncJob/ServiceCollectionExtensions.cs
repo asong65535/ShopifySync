@@ -20,7 +20,7 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.AddHttpClient<ShopifyClient>();
-        services.AddTransient<SyncOrchestrator>();
+        services.AddScoped<SyncOrchestrator>();
         services.AddSingleton<SyncService>();
 
         return services;

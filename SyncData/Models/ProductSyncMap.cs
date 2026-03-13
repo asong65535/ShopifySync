@@ -19,8 +19,14 @@ public class ProductSyncMap
     public long ShopifyInventoryItemId { get; set; }
     public long ShopifyLocationId { get; set; }
 
-    /// <summary>Last quantity pushed to Shopify. Used for delta detection.</summary>
+    /// <summary>Last agreed-upon quantity between both systems. Used for delta computation.</summary>
     public decimal LastKnownQty { get; set; }
+
+    /// <summary>PCA In_Stock at last sync (audit only — not used for delta computation).</summary>
+    public decimal LastKnownPcaQty { get; set; }
+
+    /// <summary>Shopify available qty at last sync (audit only — not used for delta computation).</summary>
+    public decimal LastKnownShopifyQty { get; set; }
 
     public DateTime LastSyncedAt { get; set; }
 }

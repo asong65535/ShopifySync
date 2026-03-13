@@ -12,6 +12,8 @@ public static class SyncResultHistoryMapper
             result.TotalPcaItems,
             result.ChangedItems,
             result.PushedToShopify,
+            result.PulledFromShopify,
+            result.ConflictsPcaWon,
             result.NotInSyncMapCount,
             result.Errors.Select(e => (e.PcaItemNum, e.Category.ToString(), e.Detail)),
             result.FatalError);

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace SyncJob;
@@ -8,7 +9,7 @@ namespace SyncJob;
 /// </summary>
 public sealed class SyncService : IDisposable
 {
-    private readonly SyncOrchestrator _orchestrator;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<SyncService> _logger;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -19,9 +20,9 @@ public sealed class SyncService : IDisposable
 
     public event EventHandler<SyncResult>? SyncCompleted;
 
-    public SyncService(SyncOrchestrator orchestrator, ILogger<SyncService> logger)
+    public SyncService(IServiceScopeFactory scopeFactory, ILogger<SyncService> logger)
     {
-        _orchestrator = orchestrator;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -115,7 +116,9 @@ public sealed class SyncService : IDisposable
     {
         try
         {
-            return await _orchestrator.RunAsync(ct);
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var orchestrator = scope.ServiceProvider.GetRequiredService<SyncOrchestrator>();
+            return await orchestrator.RunAsync(ct);
         }
         catch (OperationCanceledException)
         {

@@ -22,6 +22,8 @@ public sealed class HistoryWriter
         int totalPcaItems,
         int changedItems,
         int pushedToShopify,
+        int pulledFromShopify,
+        int conflictsPcaWon,
         int notInSyncMapCount,
         IEnumerable<(string PcaItemNum, string Category, string? Detail)> errors,
         string? fatalError)
@@ -33,6 +35,8 @@ public sealed class HistoryWriter
             TotalPcaItems = totalPcaItems,
             ChangedItems = changedItems,
             PushedToShopify = pushedToShopify,
+            PulledFromShopify = pulledFromShopify,
+            ConflictsPcaWon = conflictsPcaWon,
             NotInSyncMapCount = notInSyncMapCount,
             Errors = errors.Select(e => new SyncHistoryItemError
             {

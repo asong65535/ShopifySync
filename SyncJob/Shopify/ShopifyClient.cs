@@ -103,6 +103,60 @@ public sealed class ShopifyClient
     }
 
     // -------------------------------------------------------------------------
+    // Inventory level query — batch read for bidirectional sync
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Queries current "available" quantity for a batch of InventoryItem GIDs at a single location.
+    /// Returns a dictionary mapping ShopifyInventoryItemId (numeric) → available quantity.
+    /// Null entries in the nodes response (deleted items) are skipped.
+    /// </summary>
+    internal async Task<Dictionary<long, int>> QueryInventoryLevelsAsync(
+        IReadOnlyList<string> inventoryItemGids,
+        string locationGid,
+        CancellationToken ct = default)
+    {
+        var results = new Dictionary<long, int>(inventoryItemGids.Count);
+
+        using var doc = await PostGraphqlAsync(
+            ShopifyGraphql.QueryInventoryLevels,
+            new { ids = inventoryItemGids, locationId = locationGid },
+            ct);
+
+        var nodes = doc.RootElement
+            .GetProperty("data")
+            .GetProperty("nodes");
+
+        foreach (var node in nodes.EnumerateArray())
+        {
+            if (node.ValueKind == JsonValueKind.Null)
+                continue;
+
+            var gid = node.GetProperty("id").GetString()!;
+            var numericId = long.Parse(gid.Split('/')[^1]);
+
+            var inventoryLevel = node.GetProperty("inventoryLevel");
+            if (inventoryLevel.ValueKind == JsonValueKind.Null)
+                continue;
+
+            var quantities = inventoryLevel.GetProperty("quantities");
+            var qty = 0;
+            foreach (var q in quantities.EnumerateArray())
+            {
+                if (q.GetProperty("name").GetString() == "available")
+                {
+                    qty = q.GetProperty("quantity").GetInt32();
+                    break;
+                }
+            }
+
+            results[numericId] = qty;
+        }
+
+        return results;
+    }
+
+    // -------------------------------------------------------------------------
     // Shared internals
     // -------------------------------------------------------------------------
 
