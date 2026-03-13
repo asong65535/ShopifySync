@@ -95,8 +95,6 @@ dotnet run -- --force --map-only
 ### 4. Run the desktop app
 
 Run the executable ShopifySyncApp/ShopifySyncApp.exe
-```bash
-```
 
 Use the Settings tab to configure the poll interval and Shopify credentials, then start the scheduler or click Sync Now.
 
