@@ -30,6 +30,12 @@ ShopifySync.sln
   └── ShopifySyncApp/        Avalonia 11 MVVM desktop app
 ```
 
+## Documentation
+
+| File | Purpose |
+|------|---------|
+| [docs/ARCHITECTURE-GUIDE.md](docs/ARCHITECTURE-GUIDE.md) | System design and architecture document. Provides comprehensive background knowledge of project and quick lookup of functionality. |
+
 ## Quick Start
 
 ### 1. Configure secrets
@@ -39,8 +45,8 @@ Copy the template below into `appsettings.local.json` in each runnable project (
 ```json
 {
   "ConnectionStrings": {
-    "PcAmerica": "Server=.\\PCAMERICA;Database=CRELiquorStore;Integrated Security=True;TrustServerCertificate=True;",
-    "ShopifySync": "Server=.\\PCAMERICA;Database=ShopifySync;Integrated Security=True;TrustServerCertificate=True;"
+    "PcAmerica": "Server=.\\YOUR-PCAMERICA-DATABASE;Database=ShopifySync;Integrated Security=True;TrustServerCertificate=True;",
+    "ShopifySync": "Server=.\\YOUR-SYNC-DATABASE;Database=ShopifySync;Integrated Security=True;TrustServerCertificate=True;"
   },
   "Shopify": {
     "StoreUrl": "your-store.myshopify.com",
@@ -88,8 +94,8 @@ dotnet run -- --force --map-only
 
 ### 4. Run the desktop app
 
+Run the executable ShopifySyncApp/ShopifySyncApp.exe
 ```bash
-cd ShopifySyncApp && dotnet run
 ```
 
 Use the Settings tab to configure the poll interval and Shopify credentials, then start the scheduler or click Sync Now.
@@ -156,24 +162,3 @@ All SyncJob tests (11–21) use fake `HttpMessageHandler` — no live Shopify co
 Test 6 produces a `WARN` for 2 negative-stock items in the dev DB — expected, not a failure.
 Test 13 is skipped on the VM when the production sync map is populated.
 
-## Documentation
-
-| File | Purpose |
-|------|---------|
-| [docs/ARCHITECTURE-GUIDE.md](docs/ARCHITECTURE-GUIDE.md) | Human-readable architecture overview for GitHub |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full developer reference: class structure, sync algorithm, data model, Shopify API notes, non-obvious gotchas |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Detailed configuration and deployment guide |
-| [docs/debt.md](docs/debt.md) | Known tech debt and deferred work |
-
-## Phase Status
-
-| Phase | Status | Description |
-|-------|--------|-------------|
-| 1 | ✅ Complete | PCAmerica table/column discovery |
-| 2 | ✅ Complete | EF Core models and read-only context (`PcaData`) |
-| 3 | ✅ Complete | `SyncData` schema + `BootstrapJob` — 1,584 products imported |
-| 4 | ✅ Complete | `SyncJob` delta sync engine — PCA→Shopify push, 16 tests |
-| 4b | ✅ Complete | Bidirectional sync — three-way delta, Shopify→PCA, PCA-wins conflicts, 22 tests |
-| 5 | ✅ Complete | Avalonia desktop UI — scheduler, Sync Now, history, settings |
-| 6 | Future | Incremental bootstrap (auto-match new PCA items without re-importing) |
-| 7 | Future | Production deployment + monitoring |
